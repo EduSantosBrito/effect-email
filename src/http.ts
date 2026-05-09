@@ -207,7 +207,23 @@ const header = (headers: Readonly<Record<string, string | undefined>>, name: str
 const requestOrigin = (headers: Readonly<Record<string, string | undefined>>) =>
   header(headers, "origin").pipe(Option.orElse(() => header(headers, "referer")));
 
-const parseCallbackUrl = (value: string) => Effect.try({ try: () => new URL(value), catch: () => invalidCredentials });
+export const parseTrustedCallbackUrl = (value: string) =>
+  Effect.gen(function* () {
+    const boundary = yield* AuthBoundary;
+    const policy = yield* TrustedOriginPolicy;
+    const callbackUrl = yield* boundary
+      .parseCallbackUrl(value)
+      .pipe(Effect.mapError(() => invalidCredentials));
+    const url = new URL(callbackUrl);
+    const origin = yield* boundary
+      .parseTrustedOrigin(url.origin)
+      .pipe(Effect.mapError(() => invalidCredentials));
+    const allowed = yield* policy.allows(origin);
+    if (!allowed) {
+      return yield* invalidCredentials;
+    }
+    return url;
+  });
 
 const requireTrustedOrigin = (origin: Option.Option<string>) =>
   Effect.gen(function* () {
@@ -257,7 +273,7 @@ export const AuthApiLive = HttpApiBuilder.group(AuthApi, "auth", (handlers) =>
       .handle("signUpEmail", (ctx) =>
         Effect.gen(function* () {
           yield* requireTrustedOrigin(requestOrigin(ctx.request.headers));
-          const callbackUrl = yield* parseCallbackUrl(ctx.payload.callbackUrl);
+          const callbackUrl = yield* parseTrustedCallbackUrl(ctx.payload.callbackUrl);
           yield* emailPassword.signUp({
             callbackUrl,
             email: ctx.payload.email,
@@ -279,7 +295,7 @@ export const AuthApiLive = HttpApiBuilder.group(AuthApi, "auth", (handlers) =>
       .handle("resendVerification", (ctx) =>
         Effect.gen(function* () {
           yield* requireTrustedOrigin(requestOrigin(ctx.request.headers));
-          const callbackUrl = yield* parseCallbackUrl(ctx.payload.callbackUrl);
+          const callbackUrl = yield* parseTrustedCallbackUrl(ctx.payload.callbackUrl);
           const email = yield* boundary.parseEmail(ctx.payload.email);
           yield* emailPassword.resendVerification({ callbackUrl, email });
           return emptySuccess;
