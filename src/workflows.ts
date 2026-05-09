@@ -247,7 +247,10 @@ export const makeEmailPasswordWorkflows = (
     Effect.gen(function* () {
       const now = input.now ?? (yield* Clock.currentTimeMillis);
       const hash = yield* deps.authToken.hashToken(input.token);
-      yield* deps.storage.consumeVerificationToken({ hash, now });
+      const consumed = yield* deps.storage.consumeVerificationToken({ hash, now });
+      if (consumed.purpose !== "EmailVerification") {
+        return yield* invalidToken;
+      }
       const result: VerifyEmailResult = { verified: true };
       return result;
     }),
@@ -490,6 +493,9 @@ export const makePasswordRecoveryWorkflows = (
                 : Effect.fail(error),
           ),
         );
+      if (consumed.purpose !== "PasswordReset") {
+        return yield* invalidToken;
+      }
       yield* deps.passwordPolicy.validate({
         email: consumed.email,
         password: input.password,
