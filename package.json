@@ -53,7 +53,7 @@
     }
   },
   "scripts": {
-    "build": "bun build ./src/index.ts ./src/domain/index.ts ./src/password/index.ts ./src/token/index.ts ./src/storage/index.ts ./src/storage/dev-memory.ts ./src/email/mock.ts ./src/rate-limit/index.ts ./src/workflows/index.ts ./src/http/index.ts --outdir ./dist --root ./src --target bun --format esm && tsgo --emitDeclarationOnly",
+    "build": "bun build ./src/index.ts ./src/domain/index.ts ./src/password/index.ts ./src/token/index.ts ./src/storage/index.ts ./src/storage/dev-memory.ts ./src/email/mock.ts ./src/rate-limit/index.ts ./src/workflows/index.ts ./src/http/index.ts --outdir ./dist --root ./src --target bun --format esm --external effect && tsgo --emitDeclarationOnly",
     "check": "bun --bun tsgo --noEmit && bun run lint",
     "format": "bun --bun oxfmt --write package.json tsconfig.json README.md src",
     "format:check": "bun --bun oxfmt --check package.json tsconfig.json README.md src",
