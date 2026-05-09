@@ -95,6 +95,19 @@ export interface ResetPasswordInput {
   readonly now?: number;
 }
 
+export interface ChangePasswordInput {
+  readonly email: NormalizedEmail;
+  readonly currentPassword: PasswordText;
+  readonly newPassword: PasswordText;
+  readonly currentSessionToken: SessionToken;
+  readonly ip?: string;
+  readonly now?: number;
+}
+
+export interface ChangePasswordResult {
+  readonly currentSessionToken: SessionToken;
+}
+
 export interface EmailPasswordWorkflowsShape {
   readonly signUp: (
     input: SignUpInput,
@@ -174,6 +187,17 @@ export interface PasswordRecoveryWorkflowsShape {
   ) => Effect.Effect<
     void,
     PublicAuthError | PasswordPolicyFailure | PasswordHashFailure | AuthStorageFailure
+  >;
+  readonly changePassword: (
+    input: ChangePasswordInput,
+  ) => Effect.Effect<
+    ChangePasswordResult,
+    | PublicAuthError
+    | PasswordPolicyFailure
+    | PasswordHashFailure
+    | AuthStorageFailure
+    | TokenGenerationFailure
+    | RateLimitExceeded
   >;
 }
 
@@ -434,7 +458,7 @@ export const makePasswordRecoveryWorkflows = (
   deps: PasswordRecoveryWorkflowDeps,
   config: Pick<
     EmailPasswordWorkflowConfig,
-    "resetTokenTtlMillis"
+    "resetTokenTtlMillis" | "sessionTtlMillis"
   > = DefaultEmailPasswordWorkflowConfig,
 ): PasswordRecoveryWorkflowsShape => ({
   requestPasswordReset: (input) =>
@@ -506,6 +530,75 @@ export const makePasswordRecoveryWorkflows = (
         userId: consumed.userId,
       });
       yield* deps.storage.revokeAllUserSessions({ now, userId: consumed.userId });
+    }),
+  changePassword: (input) =>
+    Effect.gen(function* () {
+      const now = input.now ?? (yield* Clock.currentTimeMillis);
+      yield* deps.rateLimiter.check(rateLimitAttempt("PasswordChange", input.email, input.ip));
+      const currentHash = yield* deps.authToken
+        .hashToken(input.currentSessionToken)
+        .pipe(Effect.mapError(() => unauthorized));
+      const sessionLookup = yield* deps.storage
+        .findSessionByTokenHash(currentHash, now)
+        .pipe(
+          Effect.catchTag(
+            "AuthStorageFailure",
+            (
+              error,
+            ): Effect.Effect<
+              import("./storage").StoredSessionLookup,
+              PublicAuthError | AuthStorageFailure
+            > =>
+              error.reason === "NotFound" || error.reason === "SessionExpired"
+                ? Effect.fail(unauthorized)
+                : Effect.fail(error),
+          ),
+        );
+      const credentialLookup = yield* deps.storage
+        .findCredentialByEmail(input.email)
+        .pipe(
+          Effect.catchTag(
+            "AuthStorageFailure",
+            (
+              error,
+            ): Effect.Effect<EmailPasswordCredentialLookup, PublicAuthError | AuthStorageFailure> =>
+              error.reason === "NotFound" ? Effect.fail(unauthorized) : Effect.fail(error),
+          ),
+        );
+      if (credentialLookup.user.id !== sessionLookup.user.id) {
+        return yield* unauthorized;
+      }
+
+      const currentPasswordValid = yield* deps.passwordHasher.verify({
+        hash: credentialLookup.credential.passwordHash,
+        password: input.currentPassword,
+      });
+      if (!currentPasswordValid) {
+        return yield* unauthorized;
+      }
+
+      yield* deps.passwordPolicy.validate({
+        email: input.email,
+        password: input.newPassword,
+      });
+      const passwordHash = yield* deps.passwordHasher.hash(input.newPassword);
+      yield* deps.storage.updatePasswordHash({
+        passwordHash,
+        userId: sessionLookup.user.id,
+      });
+      yield* deps.storage.revokeOtherSessions({
+        currentSessionId: sessionLookup.session.id,
+        now,
+        userId: sessionLookup.user.id,
+      });
+      const issued = yield* deps.authToken.makeSessionToken;
+      yield* deps.storage.rotateSessionToken({
+        expiresAt: now + config.sessionTtlMillis,
+        nextHash: issued.hash,
+        now,
+        previousHash: currentHash,
+      });
+      return { currentSessionToken: issued.token };
     }),
 });
 
