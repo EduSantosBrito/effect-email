@@ -1,5 +1,5 @@
-import { describe, effect, expect, it } from "@effect/vitest";
-import { Effect, Redacted, Schema } from "effect";
+import { assert, describe, effect, it } from "@effect/vitest";
+import { Effect, Inspectable, Redacted, Schema } from "effect";
 import { PasswordHash, normalizeEmail, normalizePassword } from "./domain";
 import {
   NativeScryptPasswordHasher,
@@ -28,9 +28,9 @@ describe("password policy", () => {
         password: normalizePassword("x".repeat(129)),
       }).pipe(Effect.flip);
 
-      expect(short).toBeInstanceOf(PasswordPolicyFailure);
-      expect(short.reason).toBe("TooShort");
-      expect(tooLong.reason).toBe("TooLong");
+      assert.ok(Schema.is(PasswordPolicyFailure)(short));
+      assert.strictEqual(short.reason, "TooShort");
+      assert.strictEqual(tooLong.reason, "TooLong");
     }),
   );
 
@@ -46,8 +46,8 @@ describe("password policy", () => {
         password: normalizePassword("longusername"),
       }).pipe(Effect.flip);
 
-      expect(matchesEmail.reason).toBe("MatchesEmail");
-      expect(matchesLocalPart.reason).toBe("MatchesEmailLocalPart");
+      assert.strictEqual(matchesEmail.reason, "MatchesEmail");
+      assert.strictEqual(matchesLocalPart.reason, "MatchesEmailLocalPart");
     }),
   );
 
@@ -58,7 +58,7 @@ describe("password policy", () => {
         password: normalizePassword("e\u0301@example.com"),
       }).pipe(Effect.flip);
 
-      expect(result.reason).toBe("MatchesEmail");
+      assert.strictEqual(result.reason, "MatchesEmail");
     }),
   );
 });
@@ -69,8 +69,9 @@ describe("native scrypt password hasher", () => {
       const hash = yield* NativeScryptPasswordHasher.hash(normalizePassword("correct horse"));
       const value = Redacted.value(hash);
 
-      expect(String(hash)).toBe("<redacted:PasswordHash>");
-      expect(value).toMatch(
+      assert.strictEqual(String(hash), "<redacted:PasswordHash>");
+      assert.match(
+        value,
         new RegExp(
           String.raw`^\$scrypt\$n=${ScryptParams.N},r=${ScryptParams.r},p=${ScryptParams.p},dkLen=${ScryptParams.dkLen}\$[A-Za-z0-9_-]+\$[A-Za-z0-9_-]+$`,
         ),
@@ -83,7 +84,7 @@ describe("native scrypt password hasher", () => {
       const first = yield* NativeScryptPasswordHasher.hash(normalizePassword("correct horse"));
       const second = yield* NativeScryptPasswordHasher.hash(normalizePassword("correct horse"));
 
-      expect(Redacted.value(first)).not.toBe(Redacted.value(second));
+      assert.notStrictEqual(Redacted.value(first), Redacted.value(second));
     }),
   );
 
@@ -99,8 +100,8 @@ describe("native scrypt password hasher", () => {
         password: normalizePassword("wrong horse"),
       });
 
-      expect(correct).toBe(true);
-      expect(wrong).toBe(false);
+      assert.strictEqual(correct, true);
+      assert.strictEqual(wrong, false);
     }),
   );
 
@@ -111,14 +112,16 @@ describe("native scrypt password hasher", () => {
         password: normalizePassword("correct horse"),
       }).pipe(Effect.flip);
 
-      expect(result).toBeInstanceOf(PasswordHashFailure);
-      expect(result.reason).toBe("MalformedHash");
+      assert.ok(Schema.is(PasswordHashFailure)(result));
+      assert.strictEqual(result.reason, "MalformedHash");
     }),
   );
 
-  it("redacts password hashes in JSON output", () => {
-    const hash = Schema.decodeSync(PasswordHash)("$scrypt$secret");
+  it.effect("redacts password hashes in JSON output", () =>
+    Effect.gen(function* () {
+      const hash = yield* Schema.decodeEffect(PasswordHash)("$scrypt$secret");
 
-    expect(JSON.stringify(hash)).toBe('"<redacted:PasswordHash>"');
-  });
+      assert.strictEqual(Inspectable.toJson(hash), "<redacted:PasswordHash>");
+    }),
+  );
 });
