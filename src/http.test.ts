@@ -1,17 +1,17 @@
 import { assert, describe, it } from "@effect/vitest";
-import { Effect } from "effect";
-import { AuthBoundaryLive } from "./domain";
+import { Effect, Layer, Schema } from "effect";
+import { AuthBoundaryLive, AuthBoundaryLiveLayer, SessionToken } from "./domain";
 import {
   AuthApi,
   AuthApiGroup,
   AuthSessionCookieName,
+  TrustedOriginPolicy,
   UnsafeAllowAllTrustedOriginPolicy,
   makeExpiredSessionCookie,
   makeSessionCookie,
   makeTrustedOriginPolicy,
+  parseTrustedCallbackUrl,
 } from "./http";
-import { SessionToken } from "./domain";
-import { Schema } from "effect";
 
 describe("auth http api", () => {
   it.effect("defines the email password and session endpoints", () =>
@@ -60,6 +60,30 @@ describe("auth http api", () => {
       assert.strictEqual(allowed, true);
       assert.strictEqual(rejected, false);
       assert.strictEqual(unsafe, true);
+    }),
+  );
+
+  it.effect("accepts only http callback URLs from trusted origins", () =>
+    Effect.gen(function* () {
+      const allowedOrigin = yield* AuthBoundaryLive.parseTrustedOrigin("https://app.example.test");
+      const policy = makeTrustedOriginPolicy(new Set([allowedOrigin]));
+      const layers = AuthBoundaryLiveLayer.pipe(
+        Layer.provideMerge(Layer.succeed(TrustedOriginPolicy, TrustedOriginPolicy.of(policy))),
+      );
+
+      const accepted = yield* parseTrustedCallbackUrl(
+        "https://app.example.test/auth/callback?token=abc",
+      ).pipe(Effect.provide(layers));
+      const rejectedOrigin = yield* parseTrustedCallbackUrl(
+        "https://evil.example.test/auth/callback",
+      ).pipe(Effect.provide(layers), Effect.flip);
+      const rejectedProtocol = yield* parseTrustedCallbackUrl(
+        "javascript:alert(1)",
+      ).pipe(Effect.provide(layers), Effect.flip);
+
+      assert.strictEqual(accepted.origin, "https://app.example.test");
+      assert.strictEqual(rejectedOrigin.code, "InvalidCredentials");
+      assert.strictEqual(rejectedProtocol.code, "InvalidCredentials");
     }),
   );
 });
