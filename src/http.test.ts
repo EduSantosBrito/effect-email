@@ -21,7 +21,10 @@ describe("auth http api", () => {
 
       assert.deepStrictEqual(groups, ["auth"]);
       assert.deepStrictEqual(endpoints, [
+        "changePassword",
+        "completePasswordReset",
         "currentSession",
+        "requestPasswordReset",
         "resendVerification",
         "signInEmail",
         "signOut",
