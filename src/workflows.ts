@@ -22,6 +22,7 @@ import {
   type AuthStorageFailure,
   type AuthUser,
   type EmailPasswordCredentialLookup,
+  type StoredSession,
 } from "./storage";
 import { AuthToken, type TokenGenerationFailure } from "./token";
 
@@ -60,6 +61,25 @@ export interface SignInInput {
 export interface SignInResult {
   readonly user: AuthUser;
   readonly sessionToken: SessionToken;
+}
+
+export type TokenRotationDecision =
+  | { readonly _tag: "Unchanged" }
+  | { readonly _tag: "Rotated"; readonly token: SessionToken };
+
+export interface SessionLookupResult {
+  readonly session: StoredSession;
+  readonly tokenRotation: TokenRotationDecision;
+}
+
+export interface CurrentSessionInput {
+  readonly token: SessionToken;
+  readonly now?: number;
+}
+
+export interface SignOutInput {
+  readonly token: SessionToken;
+  readonly now?: number;
 }
 
 export interface EmailPasswordWorkflowsShape {
@@ -109,6 +129,22 @@ export class EmailPasswordWorkflows extends Context.Service<
   EmailPasswordWorkflowsShape
 >()("effect-auth/workflows/EmailPasswordWorkflows") {}
 
+export interface SessionWorkflowsShape {
+  readonly currentSession: (
+    input: CurrentSessionInput,
+  ) => Effect.Effect<
+    SessionLookupResult,
+    PublicAuthError | AuthStorageFailure | TokenGenerationFailure
+  >;
+  readonly signOut: (
+    input: SignOutInput,
+  ) => Effect.Effect<void, PublicAuthError | AuthStorageFailure>;
+}
+
+export class SessionWorkflows extends Context.Service<SessionWorkflows, SessionWorkflowsShape>()(
+  "effect-auth/workflows/SessionWorkflows",
+) {}
+
 export interface EmailPasswordWorkflowDeps {
   readonly boundary: import("./domain").AuthBoundaryShape;
   readonly passwordPolicy: import("./password").PasswordPolicyShape;
@@ -122,10 +158,12 @@ export interface EmailPasswordWorkflowDeps {
 export interface EmailPasswordWorkflowConfig {
   readonly verificationTokenTtlMillis: number;
   readonly sessionTtlMillis: number;
+  readonly sessionUpdateAgeMillis: number;
 }
 
 export const DefaultEmailPasswordWorkflowConfig: EmailPasswordWorkflowConfig = {
   sessionTtlMillis: 7 * 24 * 60 * 60 * 1_000,
+  sessionUpdateAgeMillis: 24 * 60 * 60 * 1_000,
   verificationTokenTtlMillis: 24 * 60 * 60 * 1_000,
 };
 
@@ -259,5 +297,84 @@ export const EmailPasswordWorkflowsLayer = Layer.effect(
         storage,
       }),
     );
+  }),
+);
+
+export interface SessionWorkflowDeps {
+  readonly authToken: import("./token").AuthTokenShape;
+  readonly storage: import("./storage").AuthStorageShape;
+}
+
+export const makeSessionWorkflows = (
+  deps: SessionWorkflowDeps,
+  config: Pick<
+    EmailPasswordWorkflowConfig,
+    "sessionTtlMillis" | "sessionUpdateAgeMillis"
+  > = DefaultEmailPasswordWorkflowConfig,
+): SessionWorkflowsShape => ({
+  currentSession: (input) =>
+    Effect.gen(function* () {
+      const now = input.now ?? (yield* Clock.currentTimeMillis);
+      const hash = yield* deps.authToken.hashToken(input.token);
+      const lookup = yield* deps.storage
+        .findSessionByTokenHash(hash, now)
+        .pipe(
+          Effect.catchTag(
+            "AuthStorageFailure",
+            (
+              error,
+            ): Effect.Effect<
+              import("./storage").StoredSessionLookup,
+              PublicAuthError | AuthStorageFailure
+            > =>
+              error.reason === "NotFound" || error.reason === "SessionExpired"
+                ? Effect.fail(unauthorized)
+                : Effect.fail(error),
+          ),
+        );
+      const refreshDueAt =
+        lookup.session.expiresAt - config.sessionTtlMillis + config.sessionUpdateAgeMillis;
+      if (now < refreshDueAt) {
+        const tokenRotation: TokenRotationDecision = { _tag: "Unchanged" };
+        return { session: lookup.session, tokenRotation };
+      }
+
+      const issued = yield* deps.authToken.makeSessionToken;
+      const rotated = yield* deps.storage.rotateSessionToken({
+        expiresAt: now + config.sessionTtlMillis,
+        nextHash: issued.hash,
+        now,
+        previousHash: hash,
+      });
+      const tokenRotation: TokenRotationDecision = {
+        _tag: "Rotated",
+        token: issued.token,
+      };
+      return { session: rotated, tokenRotation };
+    }),
+  signOut: (input) =>
+    Effect.gen(function* () {
+      const now = input.now ?? (yield* Clock.currentTimeMillis);
+      const hash = yield* deps.authToken
+        .hashToken(input.token)
+        .pipe(Effect.mapError(() => unauthorized));
+      yield* deps.storage
+        .revokeSession({ now, tokenHash: hash })
+        .pipe(
+          Effect.catchTag(
+            "AuthStorageFailure",
+            (error): Effect.Effect<void, PublicAuthError | AuthStorageFailure> =>
+              error.reason === "NotFound" ? Effect.fail(unauthorized) : Effect.fail(error),
+          ),
+        );
+    }),
+});
+
+export const SessionWorkflowsLayer = Layer.effect(
+  SessionWorkflows,
+  Effect.gen(function* () {
+    const authToken = yield* AuthToken;
+    const storage = yield* AuthStorage;
+    return SessionWorkflows.of(makeSessionWorkflows({ authToken, storage }));
   }),
 );
