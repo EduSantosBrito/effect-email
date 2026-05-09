@@ -1,5 +1,5 @@
-import { describe, effect, expect, it } from "@effect/vitest";
-import { Effect, Redacted, Schema } from "effect";
+import { assert, describe, effect, it } from "@effect/vitest";
+import { Effect, Inspectable, Redacted, Schema } from "effect";
 import {
   AuthBoundaryLive,
   BoundaryParseError,
@@ -15,7 +15,7 @@ describe("domain boundary", () => {
     Effect.gen(function* () {
       const email = yield* AuthBoundaryLive.parseEmail(" USER@example.COM ");
 
-      expect(email).toBe("user@example.com");
+      assert.strictEqual(email, "user@example.com");
     }),
   );
 
@@ -23,8 +23,8 @@ describe("domain boundary", () => {
     Effect.gen(function* () {
       const result = yield* AuthBoundaryLive.parseEmail("not-an-email").pipe(Effect.flip);
 
-      expect(result).toBeInstanceOf(BoundaryParseError);
-      expect(result.field).toBe("email");
+      assert.ok(Schema.is(BoundaryParseError)(result));
+      assert.strictEqual(result.field, "email");
     }),
   );
 
@@ -32,16 +32,18 @@ describe("domain boundary", () => {
     Effect.gen(function* () {
       const password = yield* AuthBoundaryLive.parsePassword(" e\u0301XAMPLE ");
 
-      expect(Redacted.value(password)).toBe(" \u00e9XAMPLE ");
+      assert.strictEqual(Redacted.value(password), " \u00e9XAMPLE ");
     }),
   );
 
-  it("redacts password text in string and JSON output", () => {
-    const password = normalizePassword("super-secret-password");
+  it.effect("redacts password text in string and JSON output", () =>
+    Effect.sync(() => {
+      const password = normalizePassword("super-secret-password");
 
-    expect(String(password)).toBe("<redacted:PasswordText>");
-    expect(JSON.stringify(password)).toBe('"<redacted:PasswordText>"');
-  });
+      assert.strictEqual(String(password), "<redacted:PasswordText>");
+      assert.strictEqual(Inspectable.toJson(password), "<redacted:PasswordText>");
+    }),
+  );
 
   effect("parses callback URLs and trusted origins", () =>
     Effect.gen(function* () {
@@ -50,8 +52,8 @@ describe("domain boundary", () => {
       );
       const origin = yield* AuthBoundaryLive.parseTrustedOrigin("https://app.example.test");
 
-      expect(callbackUrl).toBe("https://app.example.test/auth/callback?x=1");
-      expect(origin).toBe("https://app.example.test");
+      assert.strictEqual(callbackUrl, "https://app.example.test/auth/callback?x=1");
+      assert.strictEqual(origin, "https://app.example.test");
     }),
   );
 
@@ -61,22 +63,26 @@ describe("domain boundary", () => {
         "https://app.example.test/path",
       ).pipe(Effect.flip);
 
-      expect(result).toBeInstanceOf(BoundaryParseError);
-      expect(result.field).toBe("origin");
+      assert.ok(Schema.is(BoundaryParseError)(result));
+      assert.strictEqual(result.field, "origin");
     }),
   );
 
-  it("keeps secret auth values redacted", () => {
-    const sessionToken = Schema.decodeSync(SessionToken)("raw-session-token");
-    const passwordHash = Schema.decodeSync(PasswordHash)("stored-password-hash");
+  it.effect("keeps secret auth values redacted", () =>
+    Effect.gen(function* () {
+      const sessionToken = yield* Schema.decodeEffect(SessionToken)("raw-session-token");
+      const passwordHash = yield* Schema.decodeEffect(PasswordHash)("stored-password-hash");
 
-    expect(String(sessionToken)).toBe("<redacted:SessionToken>");
-    expect(JSON.stringify(passwordHash)).toBe('"<redacted:PasswordHash>"');
-  });
+      assert.strictEqual(String(sessionToken), "<redacted:SessionToken>");
+      assert.strictEqual(Inspectable.toJson(passwordHash), "<redacted:PasswordHash>");
+    }),
+  );
 
-  it("exposes safe public auth errors", () => {
-    expect(invalidCredentials).toBeInstanceOf(PublicAuthError);
-    expect(invalidCredentials.code).toBe("InvalidCredentials");
-    expect(invalidCredentials.message).not.toContain("user");
-  });
+  it.effect("exposes safe public auth errors", () =>
+    Effect.sync(() => {
+      assert.ok(Schema.is(PublicAuthError)(invalidCredentials));
+      assert.strictEqual(invalidCredentials.code, "InvalidCredentials");
+      assert.ok(!invalidCredentials.message.includes("user"));
+    }),
+  );
 });
