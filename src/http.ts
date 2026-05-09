@@ -18,7 +18,7 @@ import {
   invalidToken,
   unauthorized,
 } from "./domain";
-import { EmailPasswordWorkflows, SessionWorkflows } from "./workflows";
+import { EmailPasswordWorkflows, PasswordRecoveryWorkflows, SessionWorkflows } from "./workflows";
 
 export const AuthSessionCookieName = "effect_auth_session";
 
@@ -118,6 +118,22 @@ export const SignInEmailPayload = Schema.Struct({
   password: Schema.String,
 });
 
+export const RequestPasswordResetPayload = Schema.Struct({
+  callbackUrl: Schema.String,
+  email: Schema.String,
+});
+
+export const CompletePasswordResetPayload = Schema.Struct({
+  password: Schema.String,
+  token: Schema.String,
+});
+
+export const ChangePasswordPayload = Schema.Struct({
+  currentPassword: Schema.String,
+  email: Schema.String,
+  newPassword: Schema.String,
+});
+
 export const EmptySuccess = Schema.Struct({
   ok: Schema.Boolean,
 });
@@ -197,6 +213,21 @@ export const AuthApiGroup = HttpApiGroup.make("auth", { topLevel: true }).add(
     error: authErrorResponse,
     success: EmptySuccess,
   }),
+  HttpApiEndpoint.post("requestPasswordReset", "/auth/password-reset/request", {
+    error: authErrorResponse,
+    payload: RequestPasswordResetPayload,
+    success: EmptySuccess,
+  }),
+  HttpApiEndpoint.post("completePasswordReset", "/auth/password-reset/complete", {
+    error: authErrorResponse,
+    payload: CompletePasswordResetPayload,
+    success: EmptySuccess,
+  }),
+  HttpApiEndpoint.post("changePassword", "/auth/password/change", {
+    error: authErrorResponse,
+    payload: ChangePasswordPayload,
+    success: EmptySuccess,
+  }),
 );
 
 export const AuthApi = HttpApi.make("auth").add(AuthApiGroup);
@@ -267,6 +298,7 @@ export const AuthApiLive = HttpApiBuilder.group(AuthApi, "auth", (handlers) =>
   Effect.gen(function* () {
     const boundary = yield* AuthBoundary;
     const emailPassword = yield* EmailPasswordWorkflows;
+    const passwordRecovery = yield* PasswordRecoveryWorkflows;
     const sessions = yield* SessionWorkflows;
 
     return handlers
@@ -338,6 +370,44 @@ export const AuthApiLive = HttpApiBuilder.group(AuthApi, "auth", (handlers) =>
           const token = yield* sessionCookieFromRequest(ctx.request.cookies);
           yield* sessions.signOut({ token });
           yield* clearSessionCookie;
+          return emptySuccess;
+        }).pipe(Effect.mapError(mapHttpError)),
+      )
+      .handle("requestPasswordReset", (ctx) =>
+        Effect.gen(function* () {
+          yield* requireTrustedOrigin(requestOrigin(ctx.request.headers));
+          const callbackUrl = yield* parseCallbackUrl(ctx.payload.callbackUrl);
+          const email = yield* boundary.parseEmail(ctx.payload.email);
+          yield* passwordRecovery.requestPasswordReset({ callbackUrl, email });
+          return emptySuccess;
+        }).pipe(Effect.mapError(mapHttpError)),
+      )
+      .handle("completePasswordReset", (ctx) =>
+        Effect.gen(function* () {
+          yield* requireTrustedOrigin(requestOrigin(ctx.request.headers));
+          const token = yield* Schema.decodeUnknownEffect(VerificationToken)(ctx.payload.token).pipe(
+            Effect.mapError(() => invalidToken),
+          );
+          const password = yield* boundary.parsePassword(ctx.payload.password);
+          yield* passwordRecovery.resetPassword({ password, token });
+          yield* clearSessionCookie;
+          return emptySuccess;
+        }).pipe(Effect.mapError(mapHttpError)),
+      )
+      .handle("changePassword", (ctx) =>
+        Effect.gen(function* () {
+          yield* requireTrustedOrigin(requestOrigin(ctx.request.headers));
+          const currentSessionToken = yield* sessionCookieFromRequest(ctx.request.cookies);
+          const email = yield* boundary.parseEmail(ctx.payload.email);
+          const currentPassword = yield* boundary.parsePassword(ctx.payload.currentPassword);
+          const newPassword = yield* boundary.parsePassword(ctx.payload.newPassword);
+          const result = yield* passwordRecovery.changePassword({
+            currentPassword,
+            currentSessionToken,
+            email,
+            newPassword,
+          });
+          yield* setSessionCookie(result.currentSessionToken);
           return emptySuccess;
         }).pipe(Effect.mapError(mapHttpError)),
       );
