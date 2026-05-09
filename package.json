@@ -14,10 +14,46 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./domain": {
+      "types": "./dist/domain/index.d.ts",
+      "import": "./dist/domain/index.js"
+    },
+    "./password": {
+      "types": "./dist/password/index.d.ts",
+      "import": "./dist/password/index.js"
+    },
+    "./token": {
+      "types": "./dist/token/index.d.ts",
+      "import": "./dist/token/index.js"
+    },
+    "./storage": {
+      "types": "./dist/storage/index.d.ts",
+      "import": "./dist/storage/index.js"
+    },
+    "./storage/dev-memory": {
+      "types": "./dist/storage/dev-memory.d.ts",
+      "import": "./dist/storage/dev-memory.js"
+    },
+    "./email/mock": {
+      "types": "./dist/email/mock.d.ts",
+      "import": "./dist/email/mock.js"
+    },
+    "./rate-limit": {
+      "types": "./dist/rate-limit/index.d.ts",
+      "import": "./dist/rate-limit/index.js"
+    },
+    "./workflows": {
+      "types": "./dist/workflows/index.d.ts",
+      "import": "./dist/workflows/index.js"
+    },
+    "./http": {
+      "types": "./dist/http/index.d.ts",
+      "import": "./dist/http/index.js"
     }
   },
   "scripts": {
-    "build": "bun build ./src/index.ts --outdir ./dist --target bun --format esm && tsgo --emitDeclarationOnly",
+    "build": "bun build ./src/index.ts ./src/domain/index.ts ./src/password/index.ts ./src/token/index.ts ./src/storage/index.ts ./src/storage/dev-memory.ts ./src/email/mock.ts ./src/rate-limit/index.ts ./src/workflows/index.ts ./src/http/index.ts --outdir ./dist --root ./src --target bun --format esm && tsgo --emitDeclarationOnly",
     "check": "bun --bun tsgo --noEmit && bun run lint",
     "format": "bun --bun oxfmt --write package.json tsconfig.json README.md src",
     "format:check": "bun --bun oxfmt --check package.json tsconfig.json README.md src",
