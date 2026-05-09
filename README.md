@@ -53,7 +53,7 @@ const program = Effect.gen(function* () {
 ```ts
 import { Effect } from "effect";
 import { Email } from "effect-email";
-import { TestEmailInspection, layer as TestEmailLayer } from "effect-email/test";
+import { TestEmailInspection, defaultLayer as TestEmailLayer } from "effect-email/test";
 
 const assertEmail = Effect.gen(function* () {
   const email = yield* Email;

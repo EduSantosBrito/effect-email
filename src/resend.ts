@@ -134,13 +134,18 @@ const emailFromResendLayer = Layer.effect(Email)(
 
 export const layer = (
   resend: ResendConfig,
-): Layer.Layer<Email | ResendAdapter, never, HttpClient.HttpClient> => {
+): Layer.Layer<Email | ResendAdapter, never, HttpClient.HttpClient | SendPolicyService> => {
   const resendLayer = Layer.effect(ResendAdapter)(
     makeAdapter(resend).pipe(Effect.map((send) => ({ send }))),
-  ).pipe(Layer.provideMerge(defaultPolicyLayer));
+  );
 
   return emailFromResendLayer.pipe(Layer.provideMerge(resendLayer));
 };
+
+export const defaultPolicyLayerFor = (
+  resend: ResendConfig,
+): Layer.Layer<Email | ResendAdapter | SendPolicyService, never, HttpClient.HttpClient> =>
+  layer(resend).pipe(Layer.provideMerge(defaultPolicyLayer));
 
 export const defaultLayer: Layer.Layer<Email | ResendAdapter, Config.ConfigError> =
   emailFromResendLayer.pipe(

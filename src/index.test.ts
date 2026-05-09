@@ -10,10 +10,11 @@ import {
   defaultPolicyLayer,
   parserLayer,
   policyLayer,
+  defaultTestLayer,
   testLayer,
 } from "./index";
 import * as Resend from "./resend";
-import { TestEmailInspection, layer as testSubpathLayer } from "./test";
+import { TestEmailInspection, defaultLayer as defaultTestSubpathLayer } from "./test";
 
 const parsedMessage = Effect.gen(function* () {
   const mailbox = yield* MailboxParser;
@@ -39,6 +40,10 @@ describe("effect-email core", () => {
   it.effect("parses strict mailboxes and rejects unsafe recipient lists", () =>
     Effect.gen(function* () {
       const mailbox = yield* MailboxParser;
+      assert.strictEqual(
+        yield* mailbox.emailAddress("Jane.Doe+test@Example.COM"),
+        "jane.doe+test@example.com",
+      );
       const valid = yield* mailbox.mailbox({
         address: "Jane.Doe+test@Example.COM",
         displayName: "Jane Doe",
@@ -129,11 +134,11 @@ describe("effect-email core", () => {
         assert.deepStrictEqual(receipt, { provider: "test", messageId: "test-message" });
         assert.strictEqual(sent.length, 1);
       });
-      yield* program.pipe(Effect.provide(testLayer));
+      yield* program.pipe(Effect.provide(defaultTestLayer));
       yield* Effect.gen(function* () {
         const inspection = yield* TestEmailInspection;
         assert.deepStrictEqual(yield* inspection.sent, []);
-      }).pipe(Effect.provide(testSubpathLayer));
+      }).pipe(Effect.provide(defaultTestSubpathLayer));
     }),
   );
 
@@ -199,7 +204,23 @@ describe("effect-email core", () => {
           "Failure",
         );
         assert.deepStrictEqual(yield* inspection.sent, []);
-      }).pipe(Effect.provide(testLayer));
+      }).pipe(Effect.provide(testLayer.pipe(Layer.provide(defaultPolicyLayer))));
+      yield* Effect.gen(function* () {
+        const email = yield* Email;
+        const inspection = yield* TestEmailInspection;
+        assert.strictEqual(
+          yield* email.send(message).pipe(
+            Effect.flip,
+            Effect.map((failure) => failure._tag),
+          ),
+          "SendPolicyViolation",
+        );
+        assert.deepStrictEqual(yield* inspection.sent, []);
+      }).pipe(
+        Effect.provide(
+          testLayer.pipe(Layer.provide(policyLayer({ ...defaultSendPolicy, maxRecipients: 1 }))),
+        ),
+      );
     }),
   );
 });
@@ -234,6 +255,7 @@ describe("effect-email Resend adapter", () => {
         Effect.provide(
           Resend.layer(Resend.makeConfig("secret")).pipe(
             Layer.provide(Layer.succeed(HttpClient.HttpClient)(client)),
+            Layer.provide(defaultPolicyLayer),
           ),
         ),
       );
@@ -307,6 +329,7 @@ describe("effect-email Resend adapter", () => {
           Effect.provide(
             Resend.layer(Resend.makeConfig("super-secret")).pipe(
               Layer.provide(Layer.succeed(HttpClient.HttpClient)(client)),
+              Layer.provide(defaultPolicyLayer),
             ),
           ),
           Effect.exit,
