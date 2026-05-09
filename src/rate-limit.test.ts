@@ -1,5 +1,5 @@
-import { describe, effect, expect } from "@effect/vitest";
-import { Effect } from "effect";
+import { assert, describe, effect } from "@effect/vitest";
+import { Effect, Schema } from "effect";
 import { normalizeEmail } from "./domain";
 import {
   DefaultRateLimitConfig,
@@ -19,15 +19,18 @@ describe("rate limiter", () => {
         ip: "127.0.0.1",
       };
 
-      expect(deriveRateLimitKey(attempt)).toBe("SignIn:email=user%40example.com:ip=127.0.0.1");
-      expect(deriveRateLimitKey(attempt)).toBe(deriveRateLimitKey({ ...attempt }));
+      assert.strictEqual(
+        deriveRateLimitKey(attempt),
+        "SignIn:email=user%40example.com:ip=127.0.0.1",
+      );
+      assert.strictEqual(deriveRateLimitKey(attempt), deriveRateLimitKey({ ...attempt }));
     }),
   );
 
   effect("uses broad production-style defaults", () =>
     Effect.sync(() => {
-      expect(DefaultRateLimitConfig.limit).toBe(100);
-      expect(DefaultRateLimitConfig.windowMillis).toBe(10_000);
+      assert.strictEqual(DefaultRateLimitConfig.limit, 100);
+      assert.strictEqual(DefaultRateLimitConfig.windowMillis, 10_000);
     }),
   );
 
@@ -44,9 +47,9 @@ describe("rate limiter", () => {
       yield* limiter.check(attempt);
       const exceeded = yield* limiter.check(attempt).pipe(Effect.flip);
 
-      expect(exceeded).toBeInstanceOf(RateLimitExceeded);
-      expect(exceeded.bucket).toBe("PasswordReset");
-      expect(exceeded.retryAfterMillis).toBeGreaterThan(0);
+      assert.ok(Schema.is(RateLimitExceeded)(exceeded));
+      assert.strictEqual(exceeded.bucket, "PasswordReset");
+      assert.ok(exceeded.retryAfterMillis > 0);
     }),
   );
 
@@ -64,7 +67,7 @@ describe("rate limiter", () => {
         })
         .pipe(Effect.flip);
 
-      expect(exceeded.bucket).toBe("SignIn");
+      assert.strictEqual(exceeded.bucket, "SignIn");
     }),
   );
 
