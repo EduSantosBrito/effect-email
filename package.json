@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "description": "TypeScript SDK for effect-email.",
   "files": [
-    "dist"
+    "dist",
+    "!.repos"
   ],
   "type": "module",
   "main": "./dist/index.js",
@@ -17,12 +18,12 @@
   },
   "scripts": {
     "build": "bun build ./src/index.ts --outdir ./dist --target bun --format esm && tsgo --emitDeclarationOnly",
-    "check": "tsgo --noEmit",
-    "format": "oxfmt --write package.json tsconfig.json README.md src",
-    "format:check": "oxfmt --check package.json tsconfig.json README.md src",
-    "lint": "oxlint src",
-    "test": "vitest run src",
-    "prepare": "effect-tsgo patch"
+    "check": "bun --bun tsgo --noEmit",
+    "format": "bun --bun oxfmt --write package.json tsconfig.json README.md src",
+    "format:check": "bun --bun oxfmt --check package.json tsconfig.json README.md src",
+    "lint": "bun --bun oxlint src",
+    "test": "bun --bun vitest run --exclude '.repos/**' src",
+    "prepare": "bun --bun effect-tsgo patch"
   },
   "dependencies": {
     "effect": "^4.0.0-beta.64"

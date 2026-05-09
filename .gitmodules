@@ -1,15 +1,15 @@
 [submodule "effect"]
-	path = effect
+	path = .repos/effect
 	url = https://github.com/Effect-TS/effect-smol
 [submodule "resend"]
-	path = resend
+	path = .repos/resend
 	url = git@github.com:resend/resend-node.git
 [submodule "nodemailer"]
-	path = nodemailer
+	path = .repos/nodemailer
 	url = https://github.com/nodemailer/nodemailer
 [submodule "t3code"]
-	path = t3code
+	path = .repos/t3code
 	url = https://github.com/pingdotgg/t3code
 [submodule "opencode"]
-	path = opencode
+	path = .repos/opencode
 	url = https://github.com/anomalyco/opencode
