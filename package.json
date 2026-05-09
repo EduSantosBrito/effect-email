@@ -1,10 +1,17 @@
 {
   "name": "effect-email",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "TypeScript SDK for effect-email.",
   "files": [
-    "dist",
-    "!.repos"
+    "dist/index.js",
+    "dist/index.d.ts",
+    "dist/index.d.ts.map",
+    "dist/resend.js",
+    "dist/resend.d.ts",
+    "dist/resend.d.ts.map",
+    "dist/test.js",
+    "dist/test.d.ts",
+    "dist/test.d.ts.map"
   ],
   "type": "module",
   "main": "./dist/index.js",
