@@ -1,1 +1,6 @@
-export { TestEmailAdapter, TestEmailInspection, testLayer as layer } from "./index";
+export {
+  TestEmailAdapter,
+  TestEmailInspection,
+  defaultTestLayer as defaultLayer,
+  testLayer as layer,
+} from "./index";

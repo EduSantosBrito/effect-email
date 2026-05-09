@@ -155,6 +155,7 @@ const formatAddress = (mailbox: Mailbox): string =>
     : `${mailbox.displayName} <${mailbox.address}>`;
 
 export interface MailboxParserShape {
+  readonly emailAddress: (input: unknown) => Effect.Effect<EmailAddress, MailboxValidationFailure>;
   readonly address: (input: unknown) => Effect.Effect<EmailAddress, MailboxValidationFailure>;
   readonly displayName: (input: unknown) => Effect.Effect<DisplayName, MailboxValidationFailure>;
   readonly mailbox: (input: unknown) => Effect.Effect<Mailbox, MailboxValidationFailure>;
@@ -165,24 +166,27 @@ export class MailboxParser extends Context.Service<MailboxParser, MailboxParserS
   "effect-email/MailboxParser",
 ) {}
 
+const parseEmailAddress = (input: unknown): Effect.Effect<EmailAddress, MailboxValidationFailure> =>
+  Effect.suspend(() => {
+    if (
+      typeof input !== "string" ||
+      input.length > 254 ||
+      [...input].some((character) => character.charCodeAt(0) > 127) ||
+      input.includes('"') ||
+      input.includes("(") ||
+      input.includes(")") ||
+      !addressPattern.test(input)
+    ) {
+      return Effect.fail(new MailboxValidationFailure({ reason: "InvalidEmailAddress" }));
+    }
+    return Schema.decodeUnknownEffect(EmailAddress)(normalizeAddress(input)).pipe(
+      Effect.mapError(() => new MailboxValidationFailure({ reason: "InvalidEmailAddress" })),
+    );
+  });
+
 const mailboxParser: MailboxParserShape = {
-  address: (input) =>
-    Effect.suspend(() => {
-      if (
-        typeof input !== "string" ||
-        input.length > 254 ||
-        [...input].some((character) => character.charCodeAt(0) > 127) ||
-        input.includes('"') ||
-        input.includes("(") ||
-        input.includes(")") ||
-        !addressPattern.test(input)
-      ) {
-        return Effect.fail(new MailboxValidationFailure({ reason: "InvalidEmailAddress" }));
-      }
-      return Schema.decodeUnknownEffect(EmailAddress)(normalizeAddress(input)).pipe(
-        Effect.mapError(() => new MailboxValidationFailure({ reason: "InvalidEmailAddress" })),
-      );
-    }),
+  emailAddress: parseEmailAddress,
+  address: parseEmailAddress,
   displayName: (input) =>
     Effect.suspend(() => {
       if (
@@ -204,7 +208,7 @@ const mailboxParser: MailboxParserShape = {
       }
       const addressInput = getProperty(input, "address");
       const displayNameInput = getProperty(input, "displayName");
-      const address = yield* mailboxParser.address(addressInput);
+      const address = yield* mailboxParser.emailAddress(addressInput);
       if (displayNameInput === undefined) {
         return { address };
       }
@@ -495,11 +499,11 @@ const testEmailLayer = Layer.effect(Email)(
   }),
 );
 
-export const testLayer: Layer.Layer<Email | TestEmailInspection | SendPolicyService> =
-  testEmailLayer.pipe(
-    Layer.provideMerge(testInspectionLayer),
-    Layer.provideMerge(defaultPolicyLayer),
-  );
+export const testLayer: Layer.Layer<Email | TestEmailInspection, never, SendPolicyService> =
+  testEmailLayer.pipe(Layer.provideMerge(testInspectionLayer));
+
+export const defaultTestLayer: Layer.Layer<Email | TestEmailInspection | SendPolicyService> =
+  testLayer.pipe(Layer.provideMerge(defaultPolicyLayer));
 
 export interface ResendConfig {
   readonly apiKey: Redacted.Redacted<string>;
