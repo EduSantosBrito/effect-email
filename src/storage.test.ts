@@ -1,4 +1,4 @@
-import { describe, effect, expect } from "@effect/vitest";
+import { assert, describe, effect } from "@effect/vitest";
 import { Effect, Redacted, Schema } from "effect";
 import { normalizeEmail, PasswordHash, TokenHash } from "./domain";
 import { makeDevMemoryStorage, AuthStorageFailure } from "./storage";
@@ -22,9 +22,9 @@ describe("dev memory auth storage", () => {
         })
         .pipe(Effect.flip);
 
-      expect(user.id).toBe("user_1");
-      expect(duplicate).toBeInstanceOf(AuthStorageFailure);
-      expect(duplicate.reason).toBe("Conflict");
+      assert.strictEqual(user.id, "user_1");
+      assert.ok(Schema.is(AuthStorageFailure)(duplicate));
+      assert.strictEqual(duplicate.reason, "Conflict");
     }),
   );
 
@@ -50,9 +50,9 @@ describe("dev memory auth storage", () => {
       const second = yield* storage.consumeVerificationToken({ hash, now: 100 }).pipe(Effect.flip);
       const lookup = yield* storage.findCredentialByEmail(email);
 
-      expect(consumed.consumedAt).toBe(100);
-      expect(second.reason).toBe("TokenConsumed");
-      expect(lookup.credential.emailVerified).toBe(true);
+      assert.strictEqual(consumed.consumedAt, 100);
+      assert.strictEqual(second.reason, "TokenConsumed");
+      assert.strictEqual(lookup.credential.emailVerified, true);
     }),
   );
 
@@ -76,7 +76,7 @@ describe("dev memory auth storage", () => {
 
       const result = yield* storage.consumeVerificationToken({ hash, now: 100 }).pipe(Effect.flip);
 
-      expect(result.reason).toBe("TokenExpired");
+      assert.strictEqual(result.reason, "TokenExpired");
     }),
   );
 
@@ -104,9 +104,9 @@ describe("dev memory auth storage", () => {
       const oldLookup = yield* storage.findSessionByTokenHash(oldHash, 100).pipe(Effect.flip);
       const nextLookup = yield* storage.findSessionByTokenHash(nextHash, 100);
 
-      expect(rotated.id).toBe(session.id);
-      expect(oldLookup.reason).toBe("NotFound");
-      expect(nextLookup.session.expiresAt).toBe(300);
+      assert.strictEqual(rotated.id, session.id);
+      assert.strictEqual(oldLookup.reason, "NotFound");
+      assert.strictEqual(nextLookup.session.expiresAt, 300);
     }),
   );
 
@@ -137,9 +137,9 @@ describe("dev memory auth storage", () => {
       yield* storage.revokeAllUserSessions({ now: 101, userId: user.id });
       const firstAfterAll = yield* storage.findSessionByTokenHash(firstHash, 101).pipe(Effect.flip);
 
-      expect(firstLookup.session.id).toBe(first.id);
-      expect(secondLookup.reason).toBe("NotFound");
-      expect(firstAfterAll.reason).toBe("NotFound");
+      assert.strictEqual(firstLookup.session.id, first.id);
+      assert.strictEqual(secondLookup.reason, "NotFound");
+      assert.strictEqual(firstAfterAll.reason, "NotFound");
     }),
   );
 
@@ -158,7 +158,7 @@ describe("dev memory auth storage", () => {
       });
       const lookup = yield* storage.findCredentialByEmail(email);
 
-      expect(Redacted.value(lookup.credential.passwordHash)).toBe("new-hash");
+      assert.strictEqual(Redacted.value(lookup.credential.passwordHash), "new-hash");
     }),
   );
 
@@ -174,7 +174,7 @@ describe("dev memory auth storage", () => {
 
       const result = yield* storage.findSessionByTokenHash(hash, 100).pipe(Effect.flip);
 
-      expect(result.reason).toBe("SessionExpired");
+      assert.strictEqual(result.reason, "SessionExpired");
     }),
   );
 });
