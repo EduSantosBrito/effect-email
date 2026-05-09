@@ -376,7 +376,7 @@ export const AuthApiLive = HttpApiBuilder.group(AuthApi, "auth", (handlers) =>
       .handle("requestPasswordReset", (ctx) =>
         Effect.gen(function* () {
           yield* requireTrustedOrigin(requestOrigin(ctx.request.headers));
-          const callbackUrl = yield* parseCallbackUrl(ctx.payload.callbackUrl);
+          const callbackUrl = yield* parseTrustedCallbackUrl(ctx.payload.callbackUrl);
           const email = yield* boundary.parseEmail(ctx.payload.email);
           yield* passwordRecovery.requestPasswordReset({ callbackUrl, email });
           return emptySuccess;
