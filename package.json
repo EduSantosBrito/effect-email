@@ -14,10 +14,18 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./resend": {
+      "types": "./dist/resend.d.ts",
+      "import": "./dist/resend.js"
+    },
+    "./test": {
+      "types": "./dist/test.d.ts",
+      "import": "./dist/test.js"
     }
   },
   "scripts": {
-    "build": "bun build ./src/index.ts --outdir ./dist --target bun --format esm && tsgo --emitDeclarationOnly",
+    "build": "bun build ./src/index.ts ./src/resend.ts ./src/test.ts --outdir ./dist --target bun --format esm && tsgo --emitDeclarationOnly",
     "check": "bun --bun tsgo --noEmit && bun run lint",
     "format": "bun --bun oxfmt --write package.json tsconfig.json README.md src",
     "format:check": "bun --bun oxfmt --check package.json tsconfig.json README.md src",
