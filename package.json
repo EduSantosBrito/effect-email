@@ -18,10 +18,10 @@
   },
   "scripts": {
     "build": "bun build ./src/index.ts --outdir ./dist --target bun --format esm && tsgo --emitDeclarationOnly",
-    "check": "bun --bun tsgo --noEmit",
+    "check": "bun --bun tsgo --noEmit && bun run lint",
     "format": "bun --bun oxfmt --write package.json tsconfig.json README.md src",
     "format:check": "bun --bun oxfmt --check package.json tsconfig.json README.md src",
-    "lint": "bun --bun oxlint src",
+    "lint": "bun --bun oxlint -c .oxlintrc.json src",
     "test": "bun --bun vitest run --exclude '.repos/**' src",
     "prepare": "bun --bun effect-tsgo patch"
   },
@@ -31,6 +31,7 @@
   "devDependencies": {
     "@effect/tsgo": "0.5.2",
     "@effect/vitest": "4.0.0-beta.64",
+    "@oxlint/plugins": "^1.63.0",
     "@types/bun": "latest",
     "@typescript/native-preview": "latest",
     "oxfmt": "^0.48.0",

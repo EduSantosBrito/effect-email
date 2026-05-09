@@ -1,12 +1,15 @@
-import { describe, effect, expect, it } from "@effect/vitest";
+import { assert, describe, effect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
 import { createEffectEmailClient, emailAddress } from "./index";
 
 describe("effect-email", () => {
-  it("creates email addresses", () => {
-    expect(emailAddress("hello@example.com")).toEqual({
-      value: "hello@example.com",
-    });
-  });
+  it.effect("creates email addresses", () =>
+    Effect.sync(() => {
+      assert.deepStrictEqual(emailAddress("hello@example.com"), {
+        value: "hello@example.com",
+      });
+    }),
+  );
 
   effect("sends email messages", () => {
     const client = createEffectEmailClient();
