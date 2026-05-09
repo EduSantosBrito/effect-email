@@ -177,6 +177,41 @@ describe("password reset workflows", () => {
     }),
   );
 
+  it.effect("rejects tokens issued for another auth purpose", () =>
+    Effect.gen(function* () {
+      const { email, emailPassword, recovery } = yield* setup;
+      yield* emailPassword.signUp({
+        callbackUrl: new URL("https://app.example.test/verify"),
+        email: "user@example.com",
+        password: "correct horse",
+      });
+      const verification = yield* email.inspection.sent;
+      const verificationToken = verification[0]?.token;
+      if (verificationToken === undefined) return yield* Effect.die("Expected verification token");
+
+      const resetWithVerificationToken = yield* recovery
+        .resetPassword({
+          now: 1,
+          password: normalizePassword("new correct horse"),
+          token: verificationToken,
+        })
+        .pipe(Effect.flip);
+      assert.deepStrictEqual(resetWithVerificationToken, invalidToken);
+
+      yield* recovery.requestPasswordReset({
+        callbackUrl: new URL("https://app.example.test/reset"),
+        email: normalizeEmail("user@example.com"),
+      });
+      const sent = yield* email.inspection.sent;
+      const resetToken = sent[1]?.token;
+      if (resetToken === undefined) return yield* Effect.die("Expected reset token");
+      const verifyWithResetToken = yield* emailPassword
+        .verifyEmail({ now: 1, token: resetToken })
+        .pipe(Effect.flip);
+      assert.deepStrictEqual(verifyWithResetToken, invalidToken);
+    }),
+  );
+
   it.effect("propagates password policy, hash, and rate-limit failures", () =>
     Effect.gen(function* () {
       const { deps, email, emailPassword } = yield* setup;
