@@ -1,15 +1,9 @@
-import { describe, effect, expect } from "@effect/vitest";
-import { Effect, Schema } from "effect";
+import { assert, describe, effect } from "@effect/vitest";
+import { Effect, Inspectable, Schema } from "effect";
 import { normalizeEmail, VerificationToken } from "./domain";
 import { makeMockAuthEmail } from "./email";
 
 const verificationToken = (value: string) => Schema.decodeSync(VerificationToken)(value);
-
-const redactedJson = (value: unknown) => {
-  if (typeof value !== "object" || value === null) return undefined;
-  const toJson = Reflect.get(value, "toJSON");
-  return typeof toJson === "function" ? toJson.call(value) : undefined;
-};
 
 describe("mock auth email", () => {
   effect("records email verification commands for inspection", () =>
@@ -25,10 +19,10 @@ describe("mock auth email", () => {
 
       const sent = yield* mock.inspection.sent;
 
-      expect(sent).toHaveLength(1);
-      expect(sent[0]?.kind).toBe("EmailVerification");
-      expect(sent[0]?.to).toBe("user@example.com");
-      expect(String(sent[0]?.token)).toBe("<redacted:VerificationToken>");
+      assert.strictEqual(sent.length, 1);
+      assert.strictEqual(sent[0]?.kind, "EmailVerification");
+      assert.strictEqual(sent[0]?.to, "user@example.com");
+      assert.strictEqual(String(sent[0]?.token), "<redacted:VerificationToken>");
     }),
   );
 
@@ -44,9 +38,9 @@ describe("mock auth email", () => {
 
       const sent = yield* mock.inspection.sent;
 
-      expect(sent).toHaveLength(1);
-      expect(sent[0]?.kind).toBe("PasswordReset");
-      expect(sent[0]?.callbackUrl.toString()).toBe("https://app.example.test/reset");
+      assert.strictEqual(sent.length, 1);
+      assert.strictEqual(sent[0]?.kind, "PasswordReset");
+      assert.strictEqual(sent[0]?.callbackUrl.toString(), "https://app.example.test/reset");
     }),
   );
 
@@ -62,7 +56,7 @@ describe("mock auth email", () => {
       yield* mock.inspection.clear;
       const sent = yield* mock.inspection.sent;
 
-      expect(sent).toHaveLength(0);
+      assert.strictEqual(sent.length, 0);
     }),
   );
 
@@ -78,8 +72,8 @@ describe("mock auth email", () => {
 
       const sent = yield* mock.inspection.sent;
 
-      expect(String(sent[0]?.token)).toBe("<redacted:VerificationToken>");
-      expect(redactedJson(sent[0]?.token)).toBe("<redacted:VerificationToken>");
+      assert.strictEqual(String(sent[0]?.token), "<redacted:VerificationToken>");
+      assert.strictEqual(Inspectable.toJson(sent[0]?.token), "<redacted:VerificationToken>");
     }),
   );
 });
