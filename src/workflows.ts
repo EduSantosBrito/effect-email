@@ -1,8 +1,9 @@
-import { Clock, Context, Effect, Layer } from "effect";
+import { Clock, Context, Effect, Layer, Option } from "effect";
 import {
   AuthBoundary,
   type BoundaryParseError,
   emailNotVerified,
+  invalidToken,
   type NormalizedEmail,
   type PasswordText,
   type PublicAuthError,
@@ -82,6 +83,18 @@ export interface SignOutInput {
   readonly now?: number;
 }
 
+export interface RequestPasswordResetInput {
+  readonly email: NormalizedEmail;
+  readonly callbackUrl: URL;
+  readonly ip?: string;
+}
+
+export interface ResetPasswordInput {
+  readonly token: import("./domain").VerificationToken;
+  readonly password: PasswordText;
+  readonly now?: number;
+}
+
 export interface EmailPasswordWorkflowsShape {
   readonly signUp: (
     input: SignUpInput,
@@ -145,6 +158,30 @@ export class SessionWorkflows extends Context.Service<SessionWorkflows, SessionW
   "effect-auth/workflows/SessionWorkflows",
 ) {}
 
+export interface PasswordRecoveryWorkflowsShape {
+  readonly requestPasswordReset: (
+    input: RequestPasswordResetInput,
+  ) => Effect.Effect<
+    void,
+    | PublicAuthError
+    | AuthStorageFailure
+    | TokenGenerationFailure
+    | AuthEmailFailure
+    | RateLimitExceeded
+  >;
+  readonly resetPassword: (
+    input: ResetPasswordInput,
+  ) => Effect.Effect<
+    void,
+    PublicAuthError | PasswordPolicyFailure | PasswordHashFailure | AuthStorageFailure
+  >;
+}
+
+export class PasswordRecoveryWorkflows extends Context.Service<
+  PasswordRecoveryWorkflows,
+  PasswordRecoveryWorkflowsShape
+>()("effect-auth/workflows/PasswordRecoveryWorkflows") {}
+
 export interface EmailPasswordWorkflowDeps {
   readonly boundary: import("./domain").AuthBoundaryShape;
   readonly passwordPolicy: import("./password").PasswordPolicyShape;
@@ -157,11 +194,13 @@ export interface EmailPasswordWorkflowDeps {
 
 export interface EmailPasswordWorkflowConfig {
   readonly verificationTokenTtlMillis: number;
+  readonly resetTokenTtlMillis: number;
   readonly sessionTtlMillis: number;
   readonly sessionUpdateAgeMillis: number;
 }
 
 export const DefaultEmailPasswordWorkflowConfig: EmailPasswordWorkflowConfig = {
+  resetTokenTtlMillis: 15 * 60 * 1_000,
   sessionTtlMillis: 7 * 24 * 60 * 60 * 1_000,
   sessionUpdateAgeMillis: 24 * 60 * 60 * 1_000,
   verificationTokenTtlMillis: 24 * 60 * 60 * 1_000,
@@ -376,5 +415,112 @@ export const SessionWorkflowsLayer = Layer.effect(
     const authToken = yield* AuthToken;
     const storage = yield* AuthStorage;
     return SessionWorkflows.of(makeSessionWorkflows({ authToken, storage }));
+  }),
+);
+
+export interface PasswordRecoveryWorkflowDeps {
+  readonly passwordPolicy: import("./password").PasswordPolicyShape;
+  readonly passwordHasher: import("./password").PasswordHasherShape;
+  readonly authToken: import("./token").AuthTokenShape;
+  readonly storage: import("./storage").AuthStorageShape;
+  readonly authEmail: import("./email").AuthEmailShape;
+  readonly rateLimiter: import("./rate-limit").RateLimiterShape;
+}
+
+export const makePasswordRecoveryWorkflows = (
+  deps: PasswordRecoveryWorkflowDeps,
+  config: Pick<
+    EmailPasswordWorkflowConfig,
+    "resetTokenTtlMillis"
+  > = DefaultEmailPasswordWorkflowConfig,
+): PasswordRecoveryWorkflowsShape => ({
+  requestPasswordReset: (input) =>
+    Effect.gen(function* () {
+      yield* deps.rateLimiter.check(rateLimitAttempt("PasswordReset", input.email, input.ip));
+      const lookup = yield* deps.storage.findCredentialByEmail(input.email).pipe(
+        Effect.map(Option.some),
+        Effect.catchTag(
+          "AuthStorageFailure",
+          (
+            error,
+          ): Effect.Effect<Option.Option<EmailPasswordCredentialLookup>, AuthStorageFailure> =>
+            error.reason === "NotFound" ? Effect.succeed(Option.none()) : Effect.fail(error),
+        ),
+      );
+      if (Option.isNone(lookup)) {
+        return;
+      }
+
+      const issued = yield* deps.authToken.makeVerificationToken;
+      const now = yield* Clock.currentTimeMillis;
+      yield* deps.storage.storeVerificationToken({
+        email: input.email,
+        expiresAt: now + config.resetTokenTtlMillis,
+        hash: issued.hash,
+        purpose: "PasswordReset",
+        userId: lookup.value.user.id,
+      });
+      yield* deps.authEmail.sendPasswordReset({
+        callbackUrl: input.callbackUrl,
+        to: input.email,
+        token: issued.token,
+      });
+    }),
+  resetPassword: (input) =>
+    Effect.gen(function* () {
+      const now = input.now ?? (yield* Clock.currentTimeMillis);
+      const hash = yield* deps.authToken
+        .hashToken(input.token)
+        .pipe(Effect.mapError(() => invalidToken));
+      const consumed = yield* deps.storage
+        .consumeVerificationToken({ hash, now })
+        .pipe(
+          Effect.catchTag(
+            "AuthStorageFailure",
+            (
+              error,
+            ): Effect.Effect<
+              import("./storage").ConsumedVerificationToken,
+              PublicAuthError | AuthStorageFailure
+            > =>
+              error.reason === "NotFound" ||
+              error.reason === "TokenExpired" ||
+              error.reason === "TokenConsumed"
+                ? Effect.fail(invalidToken)
+                : Effect.fail(error),
+          ),
+        );
+      yield* deps.passwordPolicy.validate({
+        email: consumed.email,
+        password: input.password,
+      });
+      const passwordHash = yield* deps.passwordHasher.hash(input.password);
+      yield* deps.storage.updatePasswordHash({
+        passwordHash,
+        userId: consumed.userId,
+      });
+      yield* deps.storage.revokeAllUserSessions({ now, userId: consumed.userId });
+    }),
+});
+
+export const PasswordRecoveryWorkflowsLayer = Layer.effect(
+  PasswordRecoveryWorkflows,
+  Effect.gen(function* () {
+    const passwordPolicy = yield* PasswordPolicy;
+    const passwordHasher = yield* PasswordHasher;
+    const authToken = yield* AuthToken;
+    const storage = yield* AuthStorage;
+    const authEmail = yield* AuthEmail;
+    const rateLimiter = yield* RateLimiter;
+    return PasswordRecoveryWorkflows.of(
+      makePasswordRecoveryWorkflows({
+        authEmail,
+        authToken,
+        passwordHasher,
+        passwordPolicy,
+        rateLimiter,
+        storage,
+      }),
+    );
   }),
 );
