@@ -204,7 +204,7 @@ const mailboxParser: MailboxParserShape = {
   mailbox: (input) =>
     Effect.gen(function* () {
       if (typeof input !== "object" || input === null || Array.isArray(input)) {
-        return yield* Effect.fail(new MailboxValidationFailure({ reason: "InvalidEmailAddress" }));
+        return yield* new MailboxValidationFailure({ reason: "InvalidEmailAddress" });
       }
       const addressInput = getProperty(input, "address");
       const displayNameInput = getProperty(input, "displayName");
@@ -218,7 +218,7 @@ const mailboxParser: MailboxParserShape = {
   recipients: (input) =>
     Effect.gen(function* () {
       if (typeof input !== "object" || input === null || Array.isArray(input)) {
-        return yield* Effect.fail(new MailboxValidationFailure({ reason: "EmptyRecipients" }));
+        return yield* new MailboxValidationFailure({ reason: "EmptyRecipients" });
       }
       const empty: readonly Mailbox[] = [];
       const decodeList = (value: unknown) =>
@@ -232,12 +232,12 @@ const mailboxParser: MailboxParserShape = {
       const bcc = yield* decodeList(getProperty(input, "bcc"));
       const all = [...to, ...cc, ...bcc];
       if (all.length === 0) {
-        return yield* Effect.fail(new MailboxValidationFailure({ reason: "EmptyRecipients" }));
+        return yield* new MailboxValidationFailure({ reason: "EmptyRecipients" });
       }
       const seen = new Set<string>();
       for (const mailbox of all) {
         if (seen.has(mailbox.address)) {
-          return yield* Effect.fail(new MailboxValidationFailure({ reason: "DuplicateRecipient" }));
+          return yield* new MailboxValidationFailure({ reason: "DuplicateRecipient" });
         }
         seen.add(mailbox.address);
       }
@@ -270,7 +270,7 @@ const messageContentParser: MessageContentParserShape = {
   body: (input) =>
     Effect.gen(function* () {
       if (typeof input !== "object" || input === null || Array.isArray(input)) {
-        return yield* Effect.fail(new MessageContentValidationFailure({ reason: "EmptyBody" }));
+        return yield* new MessageContentValidationFailure({ reason: "EmptyBody" });
       }
       const textInput = getProperty(input, "text");
       const htmlInput = getProperty(input, "html");
@@ -279,14 +279,12 @@ const messageContentParser: MessageContentParserShape = {
       if (text !== undefined && html !== undefined) return { _tag: "TextAndHtml", text, html };
       if (text !== undefined) return { _tag: "TextOnly", text };
       if (html !== undefined) return { _tag: "HtmlOnly", html };
-      return yield* Effect.fail(new MessageContentValidationFailure({ reason: "EmptyBody" }));
+      return yield* new MessageContentValidationFailure({ reason: "EmptyBody" });
     }),
   attachment: (input) =>
     Effect.gen(function* () {
       if (typeof input !== "object" || input === null || Array.isArray(input)) {
-        return yield* Effect.fail(
-          new MessageContentValidationFailure({ reason: "InvalidAttachmentContent" }),
-        );
+        return yield* new MessageContentValidationFailure({ reason: "InvalidAttachmentContent" });
       }
       const name = getProperty(input, "name");
       const mediaType = getProperty(input, "mediaType");
@@ -296,9 +294,7 @@ const messageContentParser: MessageContentParserShape = {
         getProperty(input, "url") !== undefined ||
         getProperty(input, "base64") !== undefined
       ) {
-        return yield* Effect.fail(
-          new MessageContentValidationFailure({ reason: "InvalidAttachmentContent" }),
-        );
+        return yield* new MessageContentValidationFailure({ reason: "InvalidAttachmentContent" });
       }
       if (
         typeof name !== "string" ||
@@ -309,19 +305,13 @@ const messageContentParser: MessageContentParserShape = {
         hasControlCharacter(name) ||
         /[<>:"|?*]/u.test(name)
       ) {
-        return yield* Effect.fail(
-          new MessageContentValidationFailure({ reason: "InvalidAttachmentName" }),
-        );
+        return yield* new MessageContentValidationFailure({ reason: "InvalidAttachmentName" });
       }
       if (typeof mediaType !== "string" || !mediaTypePattern.test(mediaType)) {
-        return yield* Effect.fail(
-          new MessageContentValidationFailure({ reason: "InvalidMediaType" }),
-        );
+        return yield* new MessageContentValidationFailure({ reason: "InvalidMediaType" });
       }
       if (!(content instanceof Uint8Array)) {
-        return yield* Effect.fail(
-          new MessageContentValidationFailure({ reason: "InvalidAttachmentContent" }),
-        );
+        return yield* new MessageContentValidationFailure({ reason: "InvalidAttachmentContent" });
       }
       return {
         name,
@@ -349,18 +339,18 @@ const makeSendPolicyService = (policy: SendPolicy): SendPolicyServiceShape => ({
       const recipientCount =
         message.to.length + (message.cc?.length ?? 0) + (message.bcc?.length ?? 0);
       if (recipientCount === 0) {
-        return yield* Effect.fail(
-          new SendPolicyViolation({ reason: "EmptyRecipients", limit: 1, retryable: false }),
-        );
+        return yield* new SendPolicyViolation({
+          reason: "EmptyRecipients",
+          limit: 1,
+          retryable: false,
+        });
       }
       if (recipientCount > policy.maxRecipients) {
-        return yield* Effect.fail(
-          new SendPolicyViolation({
-            reason: "TooManyRecipients",
-            limit: policy.maxRecipients,
-            retryable: false,
-          }),
-        );
+        return yield* new SendPolicyViolation({
+          reason: "TooManyRecipients",
+          limit: policy.maxRecipients,
+          retryable: false,
+        });
       }
       if (
         (message.body._tag === "TextOnly" && !hasText(message.body.text)) ||
@@ -369,74 +359,60 @@ const makeSendPolicyService = (policy: SendPolicy): SendPolicyServiceShape => ({
           !hasText(message.body.text) &&
           !hasText(message.body.html))
       ) {
-        return yield* Effect.fail(
-          new SendPolicyViolation({ reason: "EmptyBody", limit: 1, retryable: false }),
-        );
+        return yield* new SendPolicyViolation({ reason: "EmptyBody", limit: 1, retryable: false });
       }
       if (utf8Bytes(message.subject) > policy.maxSubjectBytes) {
-        return yield* Effect.fail(
-          new SendPolicyViolation({
-            reason: "SubjectTooLarge",
-            limit: policy.maxSubjectBytes,
-            retryable: false,
-          }),
-        );
+        return yield* new SendPolicyViolation({
+          reason: "SubjectTooLarge",
+          limit: policy.maxSubjectBytes,
+          retryable: false,
+        });
       }
       if (
         (message.body._tag === "TextOnly" || message.body._tag === "TextAndHtml") &&
         utf8Bytes(message.body.text) > policy.maxTextBodyBytes
       ) {
-        return yield* Effect.fail(
-          new SendPolicyViolation({
-            reason: "TextBodyTooLarge",
-            limit: policy.maxTextBodyBytes,
-            retryable: false,
-          }),
-        );
+        return yield* new SendPolicyViolation({
+          reason: "TextBodyTooLarge",
+          limit: policy.maxTextBodyBytes,
+          retryable: false,
+        });
       }
       if (
         (message.body._tag === "HtmlOnly" || message.body._tag === "TextAndHtml") &&
         utf8Bytes(message.body.html) > policy.maxHtmlBodyBytes
       ) {
-        return yield* Effect.fail(
-          new SendPolicyViolation({
-            reason: "HtmlBodyTooLarge",
-            limit: policy.maxHtmlBodyBytes,
-            retryable: false,
-          }),
-        );
+        return yield* new SendPolicyViolation({
+          reason: "HtmlBodyTooLarge",
+          limit: policy.maxHtmlBodyBytes,
+          retryable: false,
+        });
       }
       const attachments = message.attachments ?? [];
       if (attachments.length > policy.maxAttachments) {
-        return yield* Effect.fail(
-          new SendPolicyViolation({
-            reason: "TooManyAttachments",
-            limit: policy.maxAttachments,
-            retryable: false,
-          }),
-        );
+        return yield* new SendPolicyViolation({
+          reason: "TooManyAttachments",
+          limit: policy.maxAttachments,
+          retryable: false,
+        });
       }
       let total = 0;
       for (const attachment of attachments) {
         if (attachment.content.byteLength > policy.maxAttachmentBytes) {
-          return yield* Effect.fail(
-            new SendPolicyViolation({
-              reason: "AttachmentTooLarge",
-              limit: policy.maxAttachmentBytes,
-              retryable: false,
-            }),
-          );
+          return yield* new SendPolicyViolation({
+            reason: "AttachmentTooLarge",
+            limit: policy.maxAttachmentBytes,
+            retryable: false,
+          });
         }
         total += attachment.content.byteLength;
       }
       if (total > policy.maxTotalAttachmentBytes) {
-        return yield* Effect.fail(
-          new SendPolicyViolation({
-            reason: "TotalAttachmentsTooLarge",
-            limit: policy.maxTotalAttachmentBytes,
-            retryable: false,
-          }),
-        );
+        return yield* new SendPolicyViolation({
+          reason: "TotalAttachmentsTooLarge",
+          limit: policy.maxTotalAttachmentBytes,
+          retryable: false,
+        });
       }
       return message;
     }),
