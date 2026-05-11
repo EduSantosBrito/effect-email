@@ -103,28 +103,31 @@ yield* email.send(message);
 Use `effect-email/test` when application code should send email but tests need inspection instead of network I/O.
 
 ```ts
+import { assert, describe, it } from "@effect/vitest";
 import { Effect } from "effect";
 import { Email, EmailMessage } from "effect-email";
 import * as TestEmail from "effect-email/test";
 
-const testProgram = Effect.gen(function* () {
-  const email = yield* Email;
-  const message = yield* EmailMessage.make({
-    from: "Acme <onboarding@example.com>",
-    to: "user@example.com",
-    subject: "Hello",
-    text: "World",
-  });
+describe("email", () => {
+  it.effect("records sent messages", () =>
+    Effect.gen(function* () {
+      const email = yield* Email;
+      const message = yield* EmailMessage.make({
+        from: "Acme <onboarding@example.com>",
+        to: "user@example.com",
+        subject: "Hello",
+        text: "World",
+      });
 
-  yield* email.send(message);
+      yield* email.send(message);
 
-  const inspection = yield* TestEmail.TestEmailInspection;
-  const sent = yield* inspection.takeSent;
+      const inspection = yield* TestEmail.TestEmailInspection;
+      const sent = yield* inspection.takeSent;
 
-  return sent.length;
+      assert.strictEqual(sent.length, 1);
+    }).pipe(Effect.provide(TestEmail.defaultLayer)),
+  );
 });
-
-await Effect.runPromise(testProgram.pipe(Effect.provide(TestEmail.defaultLayer)));
 ```
 
 ## Custom Policy
