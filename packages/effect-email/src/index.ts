@@ -27,13 +27,11 @@ const forbiddenHeaderNames = new Set([
   "to",
 ]);
 
-const hasControlCharacter = (value: string): boolean => {
-  for (const character of value) {
+const hasControlCharacter = (value: string): boolean =>
+  [...value].some((character) => {
     const code = character.charCodeAt(0);
-    if (code < 32 || code === 127) return true;
-  }
-  return false;
-};
+    return code < 32 || code === 127;
+  });
 
 export const EmailAddress = Schema.String.check(
   Schema.isMaxLength(254),
@@ -333,6 +331,20 @@ const isForbiddenHeaderName = (name: string): boolean => {
   return forbiddenHeaderNames.has(key) || key.startsWith("resend-") || key.startsWith("x-resend-");
 };
 
+const firstDuplicateBy = <A>(values: readonly A[], key: (value: A) => string): Option.Option<A> =>
+  Option.fromUndefinedOr(
+    values.find(
+      (value, index) => values.findIndex((candidate) => key(candidate) === key(value)) !== index,
+    ),
+  );
+
+const recipientEntry =
+  (field: "to" | "cc" | "bcc") =>
+  (mailbox: Mailbox): { readonly field: "to" | "cc" | "bcc"; readonly mailbox: Mailbox } => ({
+    field,
+    mailbox,
+  });
+
 const isOptionInput = (input: unknown): input is Option.Option<unknown> => Option.isOption(input);
 
 const optionalValue = (input: unknown): unknown | undefined => {
@@ -340,6 +352,18 @@ const optionalValue = (input: unknown): unknown | undefined => {
   if (isOptionInput(input)) return Option.isNone(input) ? undefined : input.value;
   return input;
 };
+
+const arrayFromOptionalInput = (input: unknown): readonly unknown[] =>
+  Option.match(Option.fromUndefinedOr(optionalValue(input)), {
+    onNone: () => [],
+    onSome: (value) => (Array.isArray(value) ? value : [value]),
+  });
+
+const optionalLength = <A>(input: readonly A[] | undefined): number =>
+  Option.match(Option.fromUndefinedOr(input), {
+    onNone: () => 0,
+    onSome: (value) => value.length,
+  });
 
 const parseEmailAddress: (input: unknown) => Effect.Effect<EmailAddress, MailboxValidationFailure> =
   Effect.fnUntraced(function* (input) {
@@ -413,13 +437,16 @@ const nonEmptyMailboxArray: (
   input: unknown,
 ) => Effect.Effect<readonly [Mailbox, ...Mailbox[]], MailboxValidationFailure> = Effect.fnUntraced(
   function* (input) {
-    const value = optionalValue(input);
-    const array = Array.isArray(value) ? value : value === undefined ? [] : [value];
+    const array = arrayFromOptionalInput(input);
     if (array.length === 0) {
       return yield* new MailboxValidationFailure({ reason: "EmptyRecipients" });
     }
-    const head = yield* parseMailbox(array[0]);
-    const tail = yield* Effect.all(array.slice(1).map(parseMailbox));
+    const [head, ...tail] = yield* Effect.forEach(array, parseMailbox, {
+      concurrency: "unbounded",
+    });
+    if (head === undefined) {
+      return yield* new MailboxValidationFailure({ reason: "EmptyRecipients" });
+    }
     return [head, ...tail];
   },
 );
@@ -428,13 +455,16 @@ const nonEmptyAttachmentArray: (
   input: unknown,
 ) => Effect.Effect<readonly [Attachment, ...Attachment[]], MessageContentValidationFailure> =
   Effect.fnUntraced(function* (input) {
-    const value = optionalValue(input);
-    const array = Array.isArray(value) ? value : value === undefined ? [] : [value];
+    const array = arrayFromOptionalInput(input);
     if (array.length === 0) {
       return yield* new MessageContentValidationFailure({ reason: "InvalidAttachmentContent" });
     }
-    const head = yield* parseAttachment(array[0]);
-    const tail = yield* Effect.all(array.slice(1).map(parseAttachment));
+    const [head, ...tail] = yield* Effect.forEach(array, parseAttachment, {
+      concurrency: "unbounded",
+    });
+    if (head === undefined) {
+      return yield* new MessageContentValidationFailure({ reason: "InvalidAttachmentContent" });
+    }
     return [head, ...tail];
   });
 
@@ -592,83 +622,107 @@ const parseEmailHeaders: (
                 ),
               ),
             ).map(([name, headerValue]) => ({ name, value: headerValue }));
-        if (rawHeaders.length === 0) return undefined;
-        const head = yield* parseEmailHeader(rawHeaders[0]);
-        const tail = yield* Effect.all(rawHeaders.slice(1).map(parseEmailHeader));
+        const [head, ...tail] = yield* Effect.forEach(rawHeaders, parseEmailHeader, {
+          concurrency: "unbounded",
+        });
+        if (head === undefined) return undefined;
         const headers: readonly [EmailHeader, ...EmailHeader[]] = [head, ...tail];
-        const seen = new Set<string>();
-        for (const header of headers) {
-          const key = header.name.toLowerCase();
-          if (seen.has(key)) {
-            return yield* new EmailHeaderValidationFailure({ reason: "DuplicateHeaderName" });
-          }
-          seen.add(key);
+        if (Option.isSome(firstDuplicateBy(headers, (header) => header.name.toLowerCase()))) {
+          return yield* new EmailHeaderValidationFailure({ reason: "DuplicateHeaderName" });
         }
         return headers;
       }),
   });
 });
 
-const headerPolicyViolation = (
-  headers: readonly EmailHeader[],
+const sendPolicyViolation = (
+  message: EmailMessage,
   config: SendPolicyConfig,
 ): Option.Option<SendPolicyViolation> => {
-  let hasLargeName = false;
-  let hasLargeValue = false;
-  let totalBytes = 0;
-  for (const header of headers) {
-    const nameBytes = utf8Bytes(header.name);
-    const valueBytes = utf8Bytes(header.value);
-    if (nameBytes > config.maxHeaderNameBytes) hasLargeName = true;
-    if (valueBytes > config.maxHeaderValueBytes) hasLargeValue = true;
-    totalBytes += nameBytes + valueBytes;
-  }
-  return Match.value({ count: headers.length, hasLargeName, hasLargeValue, totalBytes }).pipe(
+  const attachments = Option.getOrElse(Option.fromUndefinedOr(message.attachments), () => []);
+  const headers = Option.getOrElse(Option.fromUndefinedOr(message.headers), () => []);
+  const violation = (reason: SendPolicyViolation["reason"], limit: number) =>
+    new SendPolicyViolation({ reason, limit, retryable: false });
+
+  return Match.value({
+    recipientCount: message.to.length + optionalLength(message.cc) + optionalLength(message.bcc),
+    bodyEmpty: isBodyEmpty(message.body),
+    subjectBytes: utf8Bytes(message.subject),
+    textBytes: textBodyBytes(message.body),
+    htmlBytes: htmlBodyBytes(message.body),
+    attachmentCount: attachments.length,
+    hasLargeAttachment: attachments.some(
+      (attachment) => attachment.content.byteLength > config.maxAttachmentBytes,
+    ),
+    totalAttachmentBytes: attachments.reduce(
+      (total, attachment) => total + attachment.content.byteLength,
+      0,
+    ),
+    headerCount: headers.length,
+    hasLargeHeaderName: headers.some(
+      (header) => utf8Bytes(header.name) > config.maxHeaderNameBytes,
+    ),
+    hasLargeHeaderValue: headers.some(
+      (header) => utf8Bytes(header.value) > config.maxHeaderValueBytes,
+    ),
+    totalHeaderBytes: headers.reduce(
+      (total, header) => total + utf8Bytes(header.name) + utf8Bytes(header.value),
+      0,
+    ),
+  }).pipe(
     Match.when(
-      ({ count }) => count > config.maxHeaders,
-      () =>
-        Option.some(
-          new SendPolicyViolation({
-            reason: "TooManyHeaders",
-            limit: config.maxHeaders,
-            retryable: false,
-          }),
-        ),
+      ({ recipientCount }) => recipientCount === 0,
+      () => violation("EmptyRecipients", 1),
     ),
     Match.when(
-      ({ hasLargeName }) => hasLargeName,
-      () =>
-        Option.some(
-          new SendPolicyViolation({
-            reason: "HeaderNameTooLarge",
-            limit: config.maxHeaderNameBytes,
-            retryable: false,
-          }),
-        ),
+      ({ recipientCount }) => recipientCount > config.maxRecipients,
+      () => violation("TooManyRecipients", config.maxRecipients),
     ),
     Match.when(
-      ({ hasLargeValue }) => hasLargeValue,
-      () =>
-        Option.some(
-          new SendPolicyViolation({
-            reason: "HeaderValueTooLarge",
-            limit: config.maxHeaderValueBytes,
-            retryable: false,
-          }),
-        ),
+      ({ bodyEmpty }) => bodyEmpty,
+      () => violation("EmptyBody", 1),
     ),
     Match.when(
-      ({ totalBytes }) => totalBytes > config.maxTotalHeaderBytes,
-      () =>
-        Option.some(
-          new SendPolicyViolation({
-            reason: "TotalHeadersTooLarge",
-            limit: config.maxTotalHeaderBytes,
-            retryable: false,
-          }),
-        ),
+      ({ subjectBytes }) => subjectBytes > config.maxSubjectBytes,
+      () => violation("SubjectTooLarge", config.maxSubjectBytes),
     ),
-    Match.orElse(() => Option.none()),
+    Match.when(
+      ({ textBytes }) => textBytes > config.maxTextBodyBytes,
+      () => violation("TextBodyTooLarge", config.maxTextBodyBytes),
+    ),
+    Match.when(
+      ({ htmlBytes }) => htmlBytes > config.maxHtmlBodyBytes,
+      () => violation("HtmlBodyTooLarge", config.maxHtmlBodyBytes),
+    ),
+    Match.when(
+      ({ attachmentCount }) => attachmentCount > config.maxAttachments,
+      () => violation("TooManyAttachments", config.maxAttachments),
+    ),
+    Match.when(
+      ({ hasLargeAttachment }) => hasLargeAttachment,
+      () => violation("AttachmentTooLarge", config.maxAttachmentBytes),
+    ),
+    Match.when(
+      ({ totalAttachmentBytes }) => totalAttachmentBytes > config.maxTotalAttachmentBytes,
+      () => violation("TotalAttachmentsTooLarge", config.maxTotalAttachmentBytes),
+    ),
+    Match.when(
+      ({ headerCount }) => headerCount > config.maxHeaders,
+      () => violation("TooManyHeaders", config.maxHeaders),
+    ),
+    Match.when(
+      ({ hasLargeHeaderName }) => hasLargeHeaderName,
+      () => violation("HeaderNameTooLarge", config.maxHeaderNameBytes),
+    ),
+    Match.when(
+      ({ hasLargeHeaderValue }) => hasLargeHeaderValue,
+      () => violation("HeaderValueTooLarge", config.maxHeaderValueBytes),
+    ),
+    Match.when(
+      ({ totalHeaderBytes }) => totalHeaderBytes > config.maxTotalHeaderBytes,
+      () => violation("TotalHeadersTooLarge", config.maxTotalHeaderBytes),
+    ),
+    Match.option,
   );
 };
 
@@ -689,9 +743,10 @@ const parseMessageMailboxList: (
   input: unknown,
 ) => Effect.Effect<readonly [Mailbox, ...Mailbox[]] | undefined, EmailMessageValidationFailure> =
   Effect.fnUntraced(function* (field, input) {
-    const value = optionalValue(input);
-    if (value === undefined) return undefined;
-    return yield* nonEmptyMailboxArray(value).pipe(mapMailboxFailure(field));
+    return yield* Option.match(Option.fromUndefinedOr(optionalValue(input)), {
+      onNone: () => Effect.void.pipe(Effect.as(undefined)),
+      onSome: (value) => nonEmptyMailboxArray(value).pipe(mapMailboxFailure(field)),
+    });
   });
 
 const parseAttachments: (
@@ -700,9 +755,10 @@ const parseAttachments: (
   readonly [Attachment, ...Attachment[]] | undefined,
   EmailMessageValidationFailure
 > = Effect.fnUntraced(function* (input) {
-  const value = optionalValue(input);
-  if (value === undefined) return undefined;
-  return yield* nonEmptyAttachmentArray(value).pipe(mapContentFailure("attachments"));
+  return yield* Option.match(Option.fromUndefinedOr(optionalValue(input)), {
+    onNone: () => Effect.void.pipe(Effect.as(undefined)),
+    onSome: (value) => nonEmptyAttachmentArray(value).pipe(mapContentFailure("attachments")),
+  });
 });
 
 const parseEmailMessage: (
@@ -720,46 +776,62 @@ const parseEmailMessage: (
     if (raw.body !== undefined && (raw.text !== undefined || raw.html !== undefined)) {
       return yield* new EmailMessageValidationFailure({ field: "body", reason: "EmptyBody" });
     }
-    const from = yield* parseMailbox(raw.from).pipe(mapMailboxFailure("from"));
-    const to = yield* nonEmptyMailboxArray(raw.to).pipe(mapMailboxFailure("to"));
-    const cc = yield* parseMessageMailboxList("cc", raw.cc);
-    const bcc = yield* parseMessageMailboxList("bcc", raw.bcc);
-    const replyTo = yield* parseMessageMailboxList("replyTo", raw.replyTo);
-    const seen = new Set<string>();
-    const checkDuplicates = Effect.fnUntraced(function* (
-      field: "to" | "cc" | "bcc",
-      list: readonly Mailbox[] | undefined,
-    ) {
-      for (const mailbox of list ?? []) {
-        if (seen.has(mailbox.address)) {
-          return yield* new EmailMessageValidationFailure({ field, reason: "DuplicateRecipient" });
-        }
-        seen.add(mailbox.address);
-      }
-    });
-    yield* checkDuplicates("to", to);
-    yield* checkDuplicates("cc", cc);
-    yield* checkDuplicates("bcc", bcc);
-    const subject = yield* parseSubject(raw.subject).pipe(mapContentFailure("subject"));
     const bodyInput = raw.body === undefined ? { text: raw.text, html: raw.html } : raw.body;
-    const body = yield* parseMessageBody(bodyInput).pipe(mapContentFailure("body"));
-    const attachments = yield* parseAttachments(raw.attachments);
-    const headers = yield* parseEmailHeaders(raw.headers).pipe(
-      Effect.mapError(
-        (failure) =>
-          new EmailMessageValidationFailure({ field: "headers", reason: failure.reason }),
-      ),
+    const { attachments, bcc, body, cc, from, headers, replyTo, subject, to } = yield* Effect.all(
+      {
+        from: parseMailbox(raw.from).pipe(mapMailboxFailure("from")),
+        to: nonEmptyMailboxArray(raw.to).pipe(mapMailboxFailure("to")),
+        cc: parseMessageMailboxList("cc", raw.cc),
+        bcc: parseMessageMailboxList("bcc", raw.bcc),
+        replyTo: parseMessageMailboxList("replyTo", raw.replyTo),
+        subject: parseSubject(raw.subject).pipe(mapContentFailure("subject")),
+        body: parseMessageBody(bodyInput).pipe(mapContentFailure("body")),
+        attachments: parseAttachments(raw.attachments),
+        headers: parseEmailHeaders(raw.headers).pipe(
+          Effect.mapError(
+            (failure) =>
+              new EmailMessageValidationFailure({ field: "headers", reason: failure.reason }),
+          ),
+        ),
+      },
+      { concurrency: "unbounded" },
     );
+    const duplicateRecipient = firstDuplicateBy(
+      [
+        ...to.map(recipientEntry("to")),
+        ...Option.getOrElse(Option.fromUndefinedOr(cc), () => []).map(recipientEntry("cc")),
+        ...Option.getOrElse(Option.fromUndefinedOr(bcc), () => []).map(recipientEntry("bcc")),
+      ],
+      ({ mailbox }) => mailbox.address,
+    );
+    if (Option.isSome(duplicateRecipient)) {
+      return yield* new EmailMessageValidationFailure({
+        field: duplicateRecipient.value.field,
+        reason: "DuplicateRecipient",
+      });
+    }
     const message: Omit<EmailMessage, "headers"> = {
       messageType: "EmailMessage",
       from,
       to,
-      ...(cc !== undefined ? { cc } : {}),
-      ...(bcc !== undefined ? { bcc } : {}),
-      ...(replyTo !== undefined ? { replyTo } : {}),
+      ...Option.match(Option.fromUndefinedOr(cc), {
+        onNone: () => ({}),
+        onSome: (value) => ({ cc: value }),
+      }),
+      ...Option.match(Option.fromUndefinedOr(bcc), {
+        onNone: () => ({}),
+        onSome: (value) => ({ bcc: value }),
+      }),
+      ...Option.match(Option.fromUndefinedOr(replyTo), {
+        onNone: () => ({}),
+        onSome: (value) => ({ replyTo: value }),
+      }),
       subject,
       body,
-      ...(attachments !== undefined ? { attachments } : {}),
+      ...Option.match(Option.fromUndefinedOr(attachments), {
+        onNone: () => ({}),
+        onSome: (value) => ({ attachments: value }),
+      }),
     };
     return Option.match(Option.fromUndefinedOr(headers), {
       onNone: () => message,
@@ -835,88 +907,9 @@ export class SendPolicy extends Context.Service<
     return SendPolicy.of({
       ...config,
       validate: (message) =>
-        Effect.gen(function* () {
-          const recipientCount =
-            message.to.length + (message.cc?.length ?? 0) + (message.bcc?.length ?? 0);
-          if (recipientCount === 0) {
-            return yield* new SendPolicyViolation({
-              reason: "EmptyRecipients",
-              limit: 1,
-              retryable: false,
-            });
-          }
-          if (recipientCount > config.maxRecipients) {
-            return yield* new SendPolicyViolation({
-              reason: "TooManyRecipients",
-              limit: config.maxRecipients,
-              retryable: false,
-            });
-          }
-          if (isBodyEmpty(message.body)) {
-            return yield* new SendPolicyViolation({
-              reason: "EmptyBody",
-              limit: 1,
-              retryable: false,
-            });
-          }
-          if (utf8Bytes(message.subject) > config.maxSubjectBytes) {
-            return yield* new SendPolicyViolation({
-              reason: "SubjectTooLarge",
-              limit: config.maxSubjectBytes,
-              retryable: false,
-            });
-          }
-          if (textBodyBytes(message.body) > config.maxTextBodyBytes) {
-            return yield* new SendPolicyViolation({
-              reason: "TextBodyTooLarge",
-              limit: config.maxTextBodyBytes,
-              retryable: false,
-            });
-          }
-          if (htmlBodyBytes(message.body) > config.maxHtmlBodyBytes) {
-            return yield* new SendPolicyViolation({
-              reason: "HtmlBodyTooLarge",
-              limit: config.maxHtmlBodyBytes,
-              retryable: false,
-            });
-          }
-          const attachments = message.attachments ?? [];
-          if (attachments.length > config.maxAttachments) {
-            return yield* new SendPolicyViolation({
-              reason: "TooManyAttachments",
-              limit: config.maxAttachments,
-              retryable: false,
-            });
-          }
-          let total = 0;
-          for (const attachment of attachments) {
-            if (attachment.content.byteLength > config.maxAttachmentBytes) {
-              return yield* new SendPolicyViolation({
-                reason: "AttachmentTooLarge",
-                limit: config.maxAttachmentBytes,
-                retryable: false,
-              });
-            }
-            total += attachment.content.byteLength;
-          }
-          if (total > config.maxTotalAttachmentBytes) {
-            return yield* new SendPolicyViolation({
-              reason: "TotalAttachmentsTooLarge",
-              limit: config.maxTotalAttachmentBytes,
-              retryable: false,
-            });
-          }
-          yield* Option.match(
-            headerPolicyViolation(
-              Option.getOrElse(Option.fromUndefinedOr(message.headers), () => []),
-              config,
-            ),
-            {
-              onNone: () => Effect.void,
-              onSome: Effect.fail,
-            },
-          );
-          return message;
+        Option.match(sendPolicyViolation(message, config), {
+          onNone: () => Effect.succeed(message),
+          onSome: Effect.fail,
         }),
     });
   };

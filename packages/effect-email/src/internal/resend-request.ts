@@ -10,27 +10,38 @@ const encodeBody = MessageBody.$match({
 });
 
 const formatMailbox = (mailbox: Mailbox): string =>
-  mailbox.displayName === undefined
-    ? mailbox.address
-    : `${mailbox.displayName} <${mailbox.address}>`;
+  Option.match(Option.fromUndefinedOr(mailbox.displayName), {
+    onNone: () => mailbox.address,
+    onSome: (displayName) => `${displayName} <${mailbox.address}>`,
+  });
 
 export const requestBody = (message: EmailMessage) => ({
   from: formatMailbox(message.from),
   to: message.to.map(formatMailbox),
-  ...(message.cc !== undefined ? { cc: message.cc.map(formatMailbox) } : {}),
-  ...(message.bcc !== undefined ? { bcc: message.bcc.map(formatMailbox) } : {}),
-  ...(message.replyTo !== undefined ? { reply_to: message.replyTo.map(formatMailbox) } : {}),
+  ...Option.match(Option.fromUndefinedOr(message.cc), {
+    onNone: () => ({}),
+    onSome: (cc) => ({ cc: cc.map(formatMailbox) }),
+  }),
+  ...Option.match(Option.fromUndefinedOr(message.bcc), {
+    onNone: () => ({}),
+    onSome: (bcc) => ({ bcc: bcc.map(formatMailbox) }),
+  }),
+  ...Option.match(Option.fromUndefinedOr(message.replyTo), {
+    onNone: () => ({}),
+    onSome: (replyTo) => ({ reply_to: replyTo.map(formatMailbox) }),
+  }),
   subject: message.subject,
   ...encodeBody(message.body),
-  ...(message.attachments !== undefined
-    ? {
-        attachments: message.attachments.map((attachment) => ({
-          filename: attachment.name,
-          content_type: attachment.mediaType,
-          content: encodeAttachment(attachment.content),
-        })),
-      }
-    : {}),
+  ...Option.match(Option.fromUndefinedOr(message.attachments), {
+    onNone: () => ({}),
+    onSome: (attachments) => ({
+      attachments: attachments.map((attachment) => ({
+        filename: attachment.name,
+        content_type: attachment.mediaType,
+        content: encodeAttachment(attachment.content),
+      })),
+    }),
+  }),
   ...Option.match(Option.fromUndefinedOr(message.headers), {
     onNone: () => ({}),
     onSome: (headers) => ({
