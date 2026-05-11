@@ -1,4 +1,4 @@
-import { Context, Data, Effect, Option, Schema } from "effect";
+import { Context, Data, Effect, Match, Option, Schema } from "effect";
 
 const addressPattern =
   /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
@@ -579,29 +579,98 @@ const parseEmailHeaders: (
   readonly [EmailHeader, ...EmailHeader[]] | undefined,
   EmailHeaderValidationFailure
 > = Effect.fnUntraced(function* (input) {
-  const value = optionalValue(input);
-  if (value === undefined) return undefined;
-  const rawHeaders = Array.isArray(value)
-    ? value
-    : Object.entries(
-        yield* decodeEmailHeadersRecordInput(value).pipe(
-          Effect.mapError(() => new EmailHeaderValidationFailure({ reason: "InvalidHeaderName" })),
-        ),
-      ).map(([name, headerValue]) => ({ name, value: headerValue }));
-  if (rawHeaders.length === 0) return undefined;
-  const head = yield* parseEmailHeader(rawHeaders[0]);
-  const tail = yield* Effect.all(rawHeaders.slice(1).map(parseEmailHeader));
-  const headers: readonly [EmailHeader, ...EmailHeader[]] = [head, ...tail];
-  const seen = new Set<string>();
-  for (const header of headers) {
-    const key = header.name.toLowerCase();
-    if (seen.has(key)) {
-      return yield* new EmailHeaderValidationFailure({ reason: "DuplicateHeaderName" });
-    }
-    seen.add(key);
-  }
-  return headers;
+  return yield* Option.match(Option.fromUndefinedOr(optionalValue(input)), {
+    onNone: () => Effect.void.pipe(Effect.as(undefined)),
+    onSome: (value) =>
+      Effect.gen(function* () {
+        const rawHeaders = Array.isArray(value)
+          ? value
+          : Object.entries(
+              yield* decodeEmailHeadersRecordInput(value).pipe(
+                Effect.mapError(
+                  () => new EmailHeaderValidationFailure({ reason: "InvalidHeaderName" }),
+                ),
+              ),
+            ).map(([name, headerValue]) => ({ name, value: headerValue }));
+        if (rawHeaders.length === 0) return undefined;
+        const head = yield* parseEmailHeader(rawHeaders[0]);
+        const tail = yield* Effect.all(rawHeaders.slice(1).map(parseEmailHeader));
+        const headers: readonly [EmailHeader, ...EmailHeader[]] = [head, ...tail];
+        const seen = new Set<string>();
+        for (const header of headers) {
+          const key = header.name.toLowerCase();
+          if (seen.has(key)) {
+            return yield* new EmailHeaderValidationFailure({ reason: "DuplicateHeaderName" });
+          }
+          seen.add(key);
+        }
+        return headers;
+      }),
+  });
 });
+
+const headerPolicyViolation = (
+  headers: readonly EmailHeader[],
+  config: SendPolicyConfig,
+): Option.Option<SendPolicyViolation> => {
+  let hasLargeName = false;
+  let hasLargeValue = false;
+  let totalBytes = 0;
+  for (const header of headers) {
+    const nameBytes = utf8Bytes(header.name);
+    const valueBytes = utf8Bytes(header.value);
+    if (nameBytes > config.maxHeaderNameBytes) hasLargeName = true;
+    if (valueBytes > config.maxHeaderValueBytes) hasLargeValue = true;
+    totalBytes += nameBytes + valueBytes;
+  }
+  return Match.value({ count: headers.length, hasLargeName, hasLargeValue, totalBytes }).pipe(
+    Match.when(
+      ({ count }) => count > config.maxHeaders,
+      () =>
+        Option.some(
+          new SendPolicyViolation({
+            reason: "TooManyHeaders",
+            limit: config.maxHeaders,
+            retryable: false,
+          }),
+        ),
+    ),
+    Match.when(
+      ({ hasLargeName }) => hasLargeName,
+      () =>
+        Option.some(
+          new SendPolicyViolation({
+            reason: "HeaderNameTooLarge",
+            limit: config.maxHeaderNameBytes,
+            retryable: false,
+          }),
+        ),
+    ),
+    Match.when(
+      ({ hasLargeValue }) => hasLargeValue,
+      () =>
+        Option.some(
+          new SendPolicyViolation({
+            reason: "HeaderValueTooLarge",
+            limit: config.maxHeaderValueBytes,
+            retryable: false,
+          }),
+        ),
+    ),
+    Match.when(
+      ({ totalBytes }) => totalBytes > config.maxTotalHeaderBytes,
+      () =>
+        Option.some(
+          new SendPolicyViolation({
+            reason: "TotalHeadersTooLarge",
+            limit: config.maxTotalHeaderBytes,
+            retryable: false,
+          }),
+        ),
+    ),
+    Match.orElse(() => Option.none()),
+  );
+};
 
 const mapMailboxFailure = (field: EmailMessageValidationFailure["field"]) =>
   Effect.mapError(
@@ -614,11 +683,6 @@ const mapContentFailure = (field: EmailMessageValidationFailure["field"]) =>
     (failure: MessageContentValidationFailure) =>
       new EmailMessageValidationFailure({ field, reason: failure.reason }),
   );
-
-const mapHeaderFailure = Effect.mapError(
-  (failure: EmailHeaderValidationFailure) =>
-    new EmailMessageValidationFailure({ field: "headers", reason: failure.reason }),
-);
 
 const parseMessageMailboxList: (
   field: "to" | "cc" | "bcc" | "replyTo",
@@ -639,15 +703,6 @@ const parseAttachments: (
   const value = optionalValue(input);
   if (value === undefined) return undefined;
   return yield* nonEmptyAttachmentArray(value).pipe(mapContentFailure("attachments"));
-});
-
-const parseMessageHeaders: (
-  input: unknown,
-) => Effect.Effect<
-  readonly [EmailHeader, ...EmailHeader[]] | undefined,
-  EmailMessageValidationFailure
-> = Effect.fnUntraced(function* (input) {
-  return yield* parseEmailHeaders(input).pipe(mapHeaderFailure);
 });
 
 const parseEmailMessage: (
@@ -689,8 +744,13 @@ const parseEmailMessage: (
     const bodyInput = raw.body === undefined ? { text: raw.text, html: raw.html } : raw.body;
     const body = yield* parseMessageBody(bodyInput).pipe(mapContentFailure("body"));
     const attachments = yield* parseAttachments(raw.attachments);
-    const headers = yield* parseMessageHeaders(raw.headers);
-    return {
+    const headers = yield* parseEmailHeaders(raw.headers).pipe(
+      Effect.mapError(
+        (failure) =>
+          new EmailMessageValidationFailure({ field: "headers", reason: failure.reason }),
+      ),
+    );
+    const message: Omit<EmailMessage, "headers"> = {
       messageType: "EmailMessage",
       from,
       to,
@@ -700,8 +760,11 @@ const parseEmailMessage: (
       subject,
       body,
       ...(attachments !== undefined ? { attachments } : {}),
-      ...(headers !== undefined ? { headers } : {}),
     };
+    return Option.match(Option.fromUndefinedOr(headers), {
+      onNone: () => message,
+      onSome: (value) => ({ ...message, headers: value }),
+    });
   },
 );
 
@@ -843,41 +906,16 @@ export class SendPolicy extends Context.Service<
               retryable: false,
             });
           }
-          const headers = message.headers ?? [];
-          if (headers.length > config.maxHeaders) {
-            return yield* new SendPolicyViolation({
-              reason: "TooManyHeaders",
-              limit: config.maxHeaders,
-              retryable: false,
-            });
-          }
-          let totalHeaderBytes = 0;
-          for (const header of headers) {
-            const nameBytes = utf8Bytes(header.name);
-            if (nameBytes > config.maxHeaderNameBytes) {
-              return yield* new SendPolicyViolation({
-                reason: "HeaderNameTooLarge",
-                limit: config.maxHeaderNameBytes,
-                retryable: false,
-              });
-            }
-            const valueBytes = utf8Bytes(header.value);
-            if (valueBytes > config.maxHeaderValueBytes) {
-              return yield* new SendPolicyViolation({
-                reason: "HeaderValueTooLarge",
-                limit: config.maxHeaderValueBytes,
-                retryable: false,
-              });
-            }
-            totalHeaderBytes += nameBytes + valueBytes;
-          }
-          if (totalHeaderBytes > config.maxTotalHeaderBytes) {
-            return yield* new SendPolicyViolation({
-              reason: "TotalHeadersTooLarge",
-              limit: config.maxTotalHeaderBytes,
-              retryable: false,
-            });
-          }
+          yield* Option.match(
+            headerPolicyViolation(
+              Option.getOrElse(Option.fromUndefinedOr(message.headers), () => []),
+              config,
+            ),
+            {
+              onNone: () => Effect.void,
+              onSome: Effect.fail,
+            },
+          );
           return message;
         }),
     });
