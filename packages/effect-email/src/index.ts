@@ -60,6 +60,9 @@ export const EmailHeaderName = Schema.String.check(
 export type EmailHeaderName = typeof EmailHeaderName.Type;
 export const EmailHeaderValue = Schema.String.check(
   Schema.isNonEmpty(),
+  Schema.makeFilter((value: string) => value.trim().length > 0, {
+    expected: "a non-blank header value",
+  }),
   Schema.makeFilter((value: string) => !hasControlCharacter(value), {
     expected: "a single-line header value with no control characters",
   }),
