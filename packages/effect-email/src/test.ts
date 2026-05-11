@@ -2,27 +2,24 @@ import { Context, Effect, Layer, Ref, Schema } from "effect";
 import { Email, type EmailMessage, SendPolicy, type SendFailure, type SendReceipt } from "./index";
 
 const TestEmailInspectionState = Schema.declare<Ref.Ref<readonly EmailMessage[]>>(
-  (input): input is Ref.Ref<readonly EmailMessage[]> =>
-    typeof input === "object" && input !== null && Object.hasOwn(input, "ref"),
+  (input): input is Ref.Ref<readonly EmailMessage[]> => input !== undefined && input !== null,
 );
 
 const TestEmailInspectionInput = Schema.Struct({
   state: TestEmailInspectionState,
 });
 
-const SendPolicyInstance = Schema.declare<typeof SendPolicy.Service>(
-  (input): input is typeof SendPolicy.Service =>
-    typeof input === "object" && input !== null && Object.hasOwn(input, "validate"),
+const SendPolicyInput = Schema.declare<typeof SendPolicy.Service>(
+  (input): input is typeof SendPolicy.Service => input !== undefined && input !== null,
 );
 
-const TestEmailInspectionInstance = Schema.declare<typeof TestEmailInspection.Service>(
-  (input): input is typeof TestEmailInspection.Service =>
-    typeof input === "object" && input !== null && Object.hasOwn(input, "record"),
+const TestEmailInspectionServiceInput = Schema.declare<typeof TestEmailInspection.Service>(
+  (input): input is typeof TestEmailInspection.Service => input !== undefined && input !== null,
 );
 
 const TestEmailAdapterInput = Schema.Struct({
-  inspection: TestEmailInspectionInstance,
-  policy: SendPolicyInstance,
+  inspection: TestEmailInspectionServiceInput,
+  policy: SendPolicyInput,
 });
 
 export class TestEmailInspection extends Context.Service<
@@ -89,10 +86,9 @@ const testEmailLayer = Layer.effect(
   }),
 ).pipe(Layer.provideMerge(testEmailAdapterLayer));
 
-const policyConfig = SendPolicy.defaultConfig;
 const policyLayer: Layer.Layer<SendPolicy> = Layer.succeed(
   SendPolicy,
-  SendPolicy.layer(policyConfig),
+  SendPolicy.defaultLayer,
 );
 export const layer: Layer.Layer<Email | TestEmailInspection, never, SendPolicy> =
   testEmailLayer.pipe(Layer.provideMerge(testInspectionLayer));

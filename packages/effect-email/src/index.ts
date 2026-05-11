@@ -1,10 +1,34 @@
 import { Context, Data, Effect, Option, Schema } from "effect";
 
-export const EmailAddress = Schema.String.pipe(Schema.brand("EmailAddress"));
+const addressPattern =
+  /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
+const mediaTypePattern =
+  /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*(?:\s*;\s*[A-Za-z0-9!#$&^_.+-]+=[A-Za-z0-9!#$&^_.+-]+)*$/;
+
+const hasControlCharacter = (value: string): boolean => {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code < 32 || code === 127) return true;
+  }
+  return false;
+};
+
+export const EmailAddress = Schema.String.check(
+  Schema.isMaxLength(254),
+  Schema.isPattern(addressPattern),
+).pipe(Schema.brand("EmailAddress"));
 export type EmailAddress = typeof EmailAddress.Type;
-export const DisplayName = Schema.String.pipe(Schema.brand("DisplayName"));
+export const DisplayName = Schema.String.check(
+  Schema.isNonEmpty(),
+  Schema.isTrimmed(),
+  Schema.makeFilter((value: string) => !hasControlCharacter(value), {
+    expected: "a string with no control characters",
+  }),
+).pipe(Schema.brand("DisplayName"));
 export type DisplayName = typeof DisplayName.Type;
-export const MediaType = Schema.String.pipe(Schema.brand("MediaType"));
+export const MediaType = Schema.String.check(Schema.isPattern(mediaTypePattern)).pipe(
+  Schema.brand("MediaType"),
+);
 export type MediaType = typeof MediaType.Type;
 
 export interface Mailbox {
@@ -38,7 +62,7 @@ export interface EmailMessage {
 }
 
 export interface SendReceipt {
-  readonly provider: "test" | "resend";
+  readonly provider: string;
   readonly messageId: string;
 }
 
@@ -139,8 +163,6 @@ export class SendPolicyViolation extends Schema.TaggedErrorClass<SendPolicyViola
   {
     reason: Schema.Literals([
       "TooManyRecipients",
-      "EmptyRecipients",
-      "EmptyBody",
       "SubjectTooLarge",
       "TextBodyTooLarge",
       "HtmlBodyTooLarge",
@@ -155,27 +177,27 @@ export class SendPolicyViolation extends Schema.TaggedErrorClass<SendPolicyViola
 
 export class AuthenticationFailure extends Schema.TaggedErrorClass<AuthenticationFailure>()(
   "AuthenticationFailure",
-  { provider: Schema.Literal("resend"), retryable: Schema.Literal(false) },
+  { provider: Schema.String, retryable: Schema.Literal(false) },
 ) {}
 
 export class RateLimitFailure extends Schema.TaggedErrorClass<RateLimitFailure>()(
   "RateLimitFailure",
-  { provider: Schema.Literal("resend"), retryable: Schema.Literal(true) },
+  { provider: Schema.String, retryable: Schema.Literal(true) },
 ) {}
 
 export class RejectedMessageFailure extends Schema.TaggedErrorClass<RejectedMessageFailure>()(
   "RejectedMessageFailure",
-  { provider: Schema.Literal("resend"), retryable: Schema.Literal(false) },
+  { provider: Schema.String, retryable: Schema.Literal(false) },
 ) {}
 
 export class TransportUnavailableFailure extends Schema.TaggedErrorClass<TransportUnavailableFailure>()(
   "TransportUnavailableFailure",
-  { provider: Schema.Literal("resend"), retryable: Schema.Literal(true) },
+  { provider: Schema.String, retryable: Schema.Literal(true) },
 ) {}
 
 export class ProviderProtocolFailure extends Schema.TaggedErrorClass<ProviderProtocolFailure>()(
   "ProviderProtocolFailure",
-  { provider: Schema.Literal("resend"), retryable: Schema.Literal(false) },
+  { provider: Schema.String, retryable: Schema.Literal(false) },
 ) {}
 
 export type SendFailure =
@@ -216,21 +238,9 @@ const decodeEmailMessageInput = Schema.decodeUnknownEffect(EmailMessageInputSche
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
 const hasText = (value: string) => value.trim().length > 0;
-const addressPattern =
-  /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
-const mediaTypePattern =
-  /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*(?:\s*;\s*[A-Za-z0-9!#$&^_.+-]+=[A-Za-z0-9!#$&^_.+-]+)*$/;
 const stringMailboxPattern = /^([^<>,;@]+)<([^<>]+)>$/u;
 
 const normalizeAddress = (address: string): string => address.toLowerCase();
-
-const hasControlCharacter = (value: string): boolean => {
-  for (const character of value) {
-    const code = character.charCodeAt(0);
-    if (code < 32 || code === 127) return true;
-  }
-  return false;
-};
 
 const isOptionInput = (input: unknown): input is Option.Option<unknown> => Option.isOption(input);
 
@@ -521,12 +531,6 @@ export const EmailMessage = {
   make: parseEmailMessage,
 };
 
-const bodyHasContent = MessageBody.$match({
-  TextOnly: ({ text }) => hasText(text),
-  HtmlOnly: ({ html }) => hasText(html),
-  TextAndHtml: ({ text, html }) => hasText(text) || hasText(html),
-});
-
 const textBodyBytes = MessageBody.$match({
   TextOnly: ({ text }) => utf8Bytes(text),
   HtmlOnly: () => 0,
@@ -563,24 +567,10 @@ export class SendPolicy extends Context.Service<
         Effect.gen(function* () {
           const recipientCount =
             message.to.length + (message.cc?.length ?? 0) + (message.bcc?.length ?? 0);
-          if (recipientCount === 0) {
-            return yield* new SendPolicyViolation({
-              reason: "EmptyRecipients",
-              limit: 1,
-              retryable: false,
-            });
-          }
           if (recipientCount > config.maxRecipients) {
             return yield* new SendPolicyViolation({
               reason: "TooManyRecipients",
               limit: config.maxRecipients,
-              retryable: false,
-            });
-          }
-          if (!bodyHasContent(message.body)) {
-            return yield* new SendPolicyViolation({
-              reason: "EmptyBody",
-              limit: 1,
               retryable: false,
             });
           }
@@ -635,6 +625,8 @@ export class SendPolicy extends Context.Service<
         }),
     });
   };
+
+  static readonly defaultLayer = SendPolicy.layer(SendPolicy.defaultConfig);
 }
 
 export class Email extends Context.Service<

@@ -8,3 +8,5 @@ Every public API change must consider whether these also need updates:
 - README.md
 - examples
 - packages/effect-email/test/public-api-imports.ts
+
+Every package version bump must update packages/effect-email/CHANGELOG.md.

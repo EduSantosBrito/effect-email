@@ -8,9 +8,7 @@ import {
 import {
   AuthenticationFailure,
   Email,
-  type Mailbox,
   type EmailMessage,
-  MessageBody,
   ProviderProtocolFailure,
   RateLimitFailure,
   RejectedMessageFailure,
@@ -19,6 +17,7 @@ import {
   type SendReceipt,
   TransportUnavailableFailure,
 } from "./index";
+import { requestBody } from "./internal/resend-request";
 
 const ResendConfigInput = Schema.Struct({
   apiKey: Schema.Redacted(Schema.String),
@@ -34,19 +33,17 @@ const config: Config.Config<ResendConfigInput> = Config.map(
   (apiKey) => ({ apiKey: Redacted.make(apiKey) }),
 );
 
-const HttpClientInstance = Schema.declare<HttpClient.HttpClient>(
-  (input): input is HttpClient.HttpClient =>
-    typeof input === "object" && input !== null && Object.hasOwn(input, "execute"),
+const HttpClientInput = Schema.declare<HttpClient.HttpClient>((input): input is HttpClient.HttpClient =>
+  input !== undefined && input !== null,
 );
 
-const ResendConfigInstance = Schema.declare<typeof ResendConfig.Service>(
-  (input): input is typeof ResendConfig.Service =>
-    typeof input === "object" && input !== null && Object.hasOwn(input, "apiKey"),
+const ResendConfigServiceInput = Schema.declare<typeof ResendConfig.Service>(
+  (input): input is typeof ResendConfig.Service => input !== undefined && input !== null,
 );
 
 const ResendClientInput = Schema.Struct({
-  client: HttpClientInstance,
-  resend: ResendConfigInstance,
+  client: HttpClientInput,
+  resend: ResendConfigServiceInput,
 });
 
 const ResendSuccess = Schema.Struct({ id: Schema.String });
@@ -61,9 +58,6 @@ export class ResendConfig extends Context.Service<
   static readonly layer = (input: typeof ResendConfigInput.Type) =>
     Layer.succeed(ResendConfig)(ResendConfigInput.make(input));
 }
-
-export const makeConfig = (apiKey: string): ResendConfigShape =>
-  ResendConfigInput.make({ apiKey: Redacted.make(apiKey) });
 
 export class ResendClient extends Context.Service<
   ResendClient,
@@ -84,38 +78,6 @@ export class ResendClient extends Context.Service<
     });
   };
 }
-
-const encodeAttachment = (content: Uint8Array): string => Buffer.from(content).toString("base64");
-
-const encodeBody = MessageBody.$match({
-  TextOnly: ({ text }) => ({ text }),
-  HtmlOnly: ({ html }) => ({ html }),
-  TextAndHtml: ({ text, html }) => ({ text, html }),
-});
-
-const formatMailbox = (mailbox: Mailbox): string =>
-  mailbox.displayName === undefined
-    ? mailbox.address
-    : `${mailbox.displayName} <${mailbox.address}>`;
-
-const requestBody = (message: EmailMessage) => ({
-  from: formatMailbox(message.from),
-  to: message.to.map(formatMailbox),
-  ...(message.cc !== undefined ? { cc: message.cc.map(formatMailbox) } : {}),
-  ...(message.bcc !== undefined ? { bcc: message.bcc.map(formatMailbox) } : {}),
-  ...(message.replyTo !== undefined ? { reply_to: message.replyTo.map(formatMailbox) } : {}),
-  subject: message.subject,
-  ...encodeBody(message.body),
-  ...(message.attachments !== undefined
-    ? {
-        attachments: message.attachments.map((attachment) => ({
-          filename: attachment.name,
-          content_type: attachment.mediaType,
-          content: encodeAttachment(attachment.content),
-        })),
-      }
-    : {}),
-});
 
 const classifyStatus = (status: number): SendFailure => {
   if (status === 401 || status === 403) {
@@ -172,11 +134,9 @@ const executeResendSend = (
     ),
   );
 
-export const policyConfig: typeof SendPolicy.defaultConfig = SendPolicy.defaultConfig;
-
 const policyLayer: Layer.Layer<SendPolicy> = Layer.succeed(
   SendPolicy,
-  SendPolicy.layer(policyConfig),
+  SendPolicy.defaultLayer,
 );
 
 export const clientLayer: Layer.Layer<ResendClient, Config.ConfigError, HttpClient.HttpClient> =

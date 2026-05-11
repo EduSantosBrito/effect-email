@@ -1,0 +1,1 @@
+packages/effect-email/CHANGELOG.md

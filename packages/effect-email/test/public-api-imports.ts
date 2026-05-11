@@ -1,11 +1,14 @@
 import {
   Attachment,
   AuthenticationFailure,
+  DisplayName,
   Email,
+  EmailAddress,
   EmailMessage,
   EmailMessageValidationFailure,
   Mailbox,
   MailboxValidationFailure,
+  MediaType,
   MessageBody,
   MessageContentValidationFailure,
   ProviderProtocolFailure,
@@ -16,14 +19,14 @@ import {
   TransportUnavailableFailure,
   type Attachment as AttachmentShape,
   type AttachmentInput,
-  type DisplayName,
-  type EmailAddress,
+  type DisplayName as DisplayNameShape,
+  type EmailAddress as EmailAddressShape,
   type EmailMessage as EmailMessageShape,
   type EmailMessageInput,
   type EmailSend,
   type Mailbox as MailboxShape,
   type MailboxInput,
-  type MediaType,
+  type MediaType as MediaTypeShape,
   type MessageBody as MessageBodyShape,
   type MessageBodyInput,
   type SendFailure,
@@ -36,8 +39,6 @@ import {
   clientLayer,
   defaultLayer,
   layer,
-  makeConfig,
-  policyConfig,
   type ResendConfigInput,
   type ResendConfigShape,
 } from "effect-email/resend";
@@ -51,11 +52,14 @@ type PublicApiContract = {
   readonly root:
     | typeof Attachment
     | typeof AuthenticationFailure
+    | typeof DisplayName
     | typeof Email
+    | typeof EmailAddress
     | typeof EmailMessage
     | typeof EmailMessageValidationFailure
     | typeof Mailbox
     | typeof MailboxValidationFailure
+    | typeof MediaType
     | typeof MessageBody
     | typeof MessageContentValidationFailure
     | typeof ProviderProtocolFailure
@@ -66,14 +70,14 @@ type PublicApiContract = {
     | typeof TransportUnavailableFailure
     | AttachmentShape
     | AttachmentInput
-    | DisplayName
-    | EmailAddress
+    | DisplayNameShape
+    | EmailAddressShape
     | EmailMessageShape
     | EmailMessageInput
     | EmailSend
     | MailboxShape
     | MailboxInput
-    | MediaType
+    | MediaTypeShape
     | MessageBodyShape
     | MessageBodyInput
     | SendFailure
@@ -85,8 +89,6 @@ type PublicApiContract = {
     | typeof clientLayer
     | typeof defaultLayer
     | typeof layer
-    | typeof makeConfig
-    | typeof policyConfig
     | ResendConfigInput
     | ResendConfigShape;
   readonly test: typeof TestEmailInspection | typeof testDefaultLayer | typeof testLayer;

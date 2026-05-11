@@ -1,6 +1,8 @@
 {
   "name": "effect-email-monorepo",
   "private": true,
+  "description": "Monorepo for effect-email.",
+  "license": "MIT",
   "workspaces": {
     "packages": [
       "packages/*",
@@ -28,6 +30,10 @@
     "format": "bun --bun oxfmt -c .oxlintrc.json",
     "format:check": "bun --bun oxfmt --check -c .oxlintrc.json",
     "lint": "bun --filter effect-email lint",
+    "package:smoke": "bun run --cwd packages/effect-email package:smoke",
+    "changeset": "npm exec --package @changesets/cli@2.31.0 -- changeset",
+    "changeset:status": "npm exec --package @changesets/cli@2.31.0 -- changeset status",
+    "changeset:version": "npm exec --package @changesets/cli@2.31.0 -- changeset version",
     "test": "bun --filter effect-email test"
   },
   "devDependencies": {

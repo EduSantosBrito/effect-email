@@ -8,13 +8,17 @@ import {
 } from "effect/unstable/http";
 import {
   Attachment,
+  DisplayName,
   Email,
+  EmailAddress,
   EmailMessage,
   Mailbox,
+  MediaType,
   MessageBody,
   SendPolicy,
   type EmailMessageInput,
 } from "./index";
+import { requestBody } from "./internal/resend-request";
 import * as Resend from "./resend";
 import * as TestEmail from "./test";
 
@@ -27,9 +31,32 @@ const makeMessage = (input: Partial<EmailMessageInput> = {}) =>
     ...input,
   });
 
+const ResendRequestBodySchema = Schema.Struct({
+  from: Schema.String,
+  to: Schema.Array(Schema.String),
+  cc: Schema.Array(Schema.String),
+  bcc: Schema.Array(Schema.String),
+  reply_to: Schema.Array(Schema.String),
+  subject: Schema.String,
+  text: Schema.String,
+  html: Schema.String,
+  attachments: Schema.Array(
+    Schema.Struct({
+      filename: Schema.String,
+      content_type: Schema.String,
+      content: Schema.String,
+    }),
+  ),
+});
+
+const decodeResendRequestBody = Schema.decodeUnknownEffect(ResendRequestBodySchema);
+const decodeEmailAddress = Schema.decodeUnknownEffect(EmailAddress);
+const decodeDisplayName = Schema.decodeUnknownEffect(DisplayName);
+const decodeMediaType = Schema.decodeUnknownEffect(MediaType);
+
 const provideResend = (
   client: HttpClient.HttpClient,
-  policy: Layer.Layer<SendPolicy> = Layer.succeed(SendPolicy)(SendPolicy.layer(Resend.policyConfig)),
+  policy: Layer.Layer<SendPolicy> = Layer.succeed(SendPolicy)(SendPolicy.defaultLayer),
 ): Layer.Layer<Email> =>
   Resend.layer.pipe(
     Layer.provide(
@@ -42,7 +69,7 @@ const provideResend = (
         }),
       ),
     ),
-    Layer.provide(Layer.succeed(Resend.ResendConfig)(Resend.makeConfig("secret"))),
+    Layer.provide(Resend.ResendConfig.layer({ apiKey: Redacted.make("secret") })),
     Layer.provide(Layer.succeed(HttpClient.HttpClient)(client)),
     Layer.provide(policy),
   );
@@ -139,6 +166,11 @@ describe("effect-email constructors", () => {
         content: new Uint8Array([1]),
       });
       assert.strictEqual(attachment.mediaType, "application/pdf");
+
+      assert.strictEqual(yield* decodeEmailAddress("jane@example.com"), "jane@example.com");
+      assert.strictEqual(yield* decodeDisplayName("Jane Doe"), "Jane Doe");
+      assert.strictEqual(yield* decodeMediaType("text/plain"), "text/plain");
+      yield* decodeEmailAddress("bad(comment)@example.com").pipe(Effect.flip);
     }),
   );
 });
@@ -191,7 +223,37 @@ describe("effect-email policy and test adapter", () => {
 });
 
 describe("effect-email Resend adapter", () => {
-  it.effect("maps rich request fields, decodes success, and does not retry", () =>
+  it.effect("maps rich request fields without HTTP", () =>
+    Effect.gen(function* () {
+      const message = yield* makeMessage({
+        cc: "cc@example.com",
+        bcc: "bcc@example.com",
+        replyTo: "reply@example.com",
+        html: "<strong>Plain</strong>",
+        attachments: {
+          name: "report.txt",
+          mediaType: "text/plain",
+          content: new Uint8Array([104, 105]),
+        },
+      });
+
+      const body = yield* decodeResendRequestBody(requestBody(message));
+
+      assert.strictEqual(body.from, "Sender <sender@example.com>");
+      assert.deepStrictEqual(body.to, ["you@example.com"]);
+      assert.deepStrictEqual(body.cc, ["cc@example.com"]);
+      assert.deepStrictEqual(body.bcc, ["bcc@example.com"]);
+      assert.deepStrictEqual(body.reply_to, ["reply@example.com"]);
+      assert.strictEqual(body.subject, "Hello");
+      assert.strictEqual(body.text, "Plain");
+      assert.strictEqual(body.html, "<strong>Plain</strong>");
+      assert.deepStrictEqual(body.attachments, [
+        { filename: "report.txt", content_type: "text/plain", content: "aGk=" },
+      ]);
+    }),
+  );
+
+  it.effect("decodes success and does not retry", () =>
     Effect.gen(function* () {
       const attempts = yield* Ref.make(0);
       const seen = yield* Ref.make<Request | undefined>(undefined);
@@ -238,40 +300,6 @@ describe("effect-email Resend adapter", () => {
       assert.strictEqual(request.url, "https://api.resend.com/emails");
       assert.strictEqual(request.method, "POST");
       assert.strictEqual(request.headers.get("authorization"), "Bearer secret");
-      const body = yield* Effect.promise(() => request.json()).pipe(
-        Effect.flatMap(
-          Schema.decodeUnknownEffect(
-            Schema.Struct({
-              from: Schema.String,
-              to: Schema.Array(Schema.String),
-              cc: Schema.Array(Schema.String),
-              bcc: Schema.Array(Schema.String),
-              reply_to: Schema.Array(Schema.String),
-              subject: Schema.String,
-              text: Schema.String,
-              html: Schema.String,
-              attachments: Schema.Array(
-                Schema.Struct({
-                  filename: Schema.String,
-                  content_type: Schema.String,
-                  content: Schema.String,
-                }),
-              ),
-            }),
-          ),
-        ),
-      );
-      assert.strictEqual(body.from, "Sender <sender@example.com>");
-      assert.deepStrictEqual(body.to, ["you@example.com"]);
-      assert.deepStrictEqual(body.cc, ["cc@example.com"]);
-      assert.deepStrictEqual(body.bcc, ["bcc@example.com"]);
-      assert.deepStrictEqual(body.reply_to, ["reply@example.com"]);
-      assert.strictEqual(body.subject, "Hello");
-      assert.strictEqual(body.text, "Plain");
-      assert.strictEqual(body.html, "<strong>Plain</strong>");
-      assert.deepStrictEqual(body.attachments, [
-        { filename: "report.txt", content_type: "text/plain", content: "aGk=" },
-      ]);
     }),
   );
 
@@ -339,8 +367,10 @@ describe("effect-email Resend adapter", () => {
       }).pipe(Effect.provide(provideResend(malformedClient)), Effect.flip);
       assert.ok(Predicate.isTagged(malformedFailure, "ProviderProtocolFailure"));
 
-      const config = Resend.makeConfig("secret");
-      assert.deepStrictEqual(config, { apiKey: Redacted.make("secret") });
+      const config = yield* Effect.gen(function* () {
+        return yield* Resend.ResendConfig;
+      }).pipe(Effect.provide(Resend.ResendConfig.layer({ apiKey: Redacted.make("secret") })));
+      assert.deepStrictEqual(config.apiKey, Redacted.make("secret"));
     }),
   );
 });
