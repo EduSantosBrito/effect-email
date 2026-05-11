@@ -66,7 +66,7 @@ const provideResend = (
           const httpClient = yield* HttpClient.HttpClient;
           const resend = yield* Resend.ResendConfig;
           return Resend.ResendClient.layer({ client: httpClient, resend });
-        }),
+        }).pipe(Effect.annotateLogs({ service: "@effect-email/ResendClient" })),
       ),
     ),
     Layer.provide(Resend.ResendConfig.layer({ apiKey: Redacted.make("secret") })),
@@ -114,9 +114,7 @@ describe("effect-email constructors", () => {
 
   it.effect("fails fast with top-level field and reason", () =>
     Effect.gen(function* () {
-      const cases: ReadonlyArray<
-        readonly [Partial<EmailMessageInput>, string, string]
-      > = [
+      const cases: ReadonlyArray<readonly [Partial<EmailMessageInput>, string, string]> = [
         [{ from: "bad(comment)@example.com" }, "from", "InvalidEmailAddress"],
         [{ to: [] }, "to", "EmptyRecipients"],
         [{ to: ["a@example.com"], cc: ["A@example.com"] }, "cc", "DuplicateRecipient"],
@@ -148,6 +146,11 @@ describe("effect-email constructors", () => {
 
       const withReplyToDuplicate = yield* makeMessage({ replyTo: "you@example.com" });
       assert.strictEqual(withReplyToDuplicate.replyTo?.[0]?.address, "you@example.com");
+
+      const alreadyBuilt = yield* makeMessage();
+      const alreadyBuiltFailure = yield* EmailMessage.make(alreadyBuilt).pipe(Effect.flip);
+      assert.strictEqual(alreadyBuiltFailure.field, "body");
+      assert.strictEqual(alreadyBuiltFailure.reason, "EmptyBody");
     }),
   );
 
@@ -184,6 +187,31 @@ describe("effect-email policy and test adapter", () => {
         assert.strictEqual(policy.maxRecipients, SendPolicy.defaultConfig.maxRecipients);
         assert.deepStrictEqual(yield* policy.validate(message), message);
       }).pipe(Effect.provide(Layer.succeed(SendPolicy)(SendPolicy.layer({}))));
+
+      const policyCases: ReadonlyArray<readonly [Partial<SendPolicy.Config>, string]> = [
+        [{ maxRecipients: 0 }, "TooManyRecipients"],
+        [{ maxSubjectBytes: 1 }, "SubjectTooLarge"],
+        [{ maxTextBodyBytes: 1 }, "TextBodyTooLarge"],
+        [{ maxHtmlBodyBytes: 1 }, "HtmlBodyTooLarge"],
+        [{ maxAttachments: 0 }, "TooManyAttachments"],
+        [{ maxAttachmentBytes: 1 }, "AttachmentTooLarge"],
+        [{ maxTotalAttachmentBytes: 1 }, "TotalAttachmentsTooLarge"],
+      ];
+      const policyMessage = yield* makeMessage({
+        html: "Plain html",
+        attachments: {
+          name: "report.txt",
+          mediaType: "text/plain",
+          content: new Uint8Array([104, 105]),
+        },
+      });
+      for (const [config, reason] of policyCases) {
+        const failure = yield* Effect.gen(function* () {
+          const policy = yield* SendPolicy;
+          return yield* policy.validate(policyMessage);
+        }).pipe(Effect.provide(Layer.succeed(SendPolicy)(SendPolicy.layer(config))), Effect.flip);
+        assert.strictEqual(failure.reason, reason);
+      }
 
       yield* Effect.gen(function* () {
         const email = yield* Email;

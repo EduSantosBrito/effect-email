@@ -151,7 +151,7 @@ const EmailLive = Resend.layer.pipe(
   Layer.provide(
     Layer.succeed(SendPolicy)(
       SendPolicy.layer({
-        ...SendPolicy.defaultConfig,
+        ...Resend.policyConfig,
         maxRecipients: 10,
       }),
     ),

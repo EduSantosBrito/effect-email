@@ -1,6 +1,6 @@
 {
   "name": "effect-email",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Effect-first email SDK with provider-neutral core APIs and Resend support.",
   "keywords": [
     "effect",
@@ -48,11 +48,11 @@
   },
   "scripts": {
     "build": "rm -rf dist && bun build ./src/index.ts ./src/resend.ts ./src/test.ts --outdir ./dist --target bun --format esm --packages external && tsgo --emitDeclarationOnly",
-    "check": "bun --bun tsgo --noEmit && bun run lint",
+    "check": "bun --bun tsgo --project tsconfig.check.json && bun run lint",
     "format": "bun --bun oxfmt --write package.json tsconfig.json src",
     "format:check": "bun --bun oxfmt --check package.json tsconfig.json src",
     "knip": "bunx knip",
-    "lint": "bun --bun oxlint -c ../../.oxlintrc.json src",
+    "lint": "bun --bun oxlint -c ../../oxlint.config.ts src",
     "package:smoke": "bun run build && npm pack --dry-run",
     "prepack": "bun run build",
     "test": "bun --bun vitest run src",

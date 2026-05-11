@@ -30,7 +30,7 @@ export class TestEmailInspection extends Context.Service<
     readonly clear: Effect.Effect<void>;
     readonly record: (message: EmailMessage) => Effect.Effect<void>;
   }
->()("TestEmailInspection") {
+>()("@effect-email/TestEmailInspection") {
   static readonly layer = (input: typeof TestEmailInspectionInput.Type) => {
     const config = TestEmailInspectionInput.make(input);
     return TestEmailInspection.of({
@@ -43,12 +43,12 @@ export class TestEmailInspection extends Context.Service<
   };
 }
 
-class TestEmailAdapter extends Context.Service<
+export class TestEmailAdapter extends Context.Service<
   TestEmailAdapter,
   {
     readonly send: (message: EmailMessage) => Effect.Effect<SendReceipt, SendFailure>;
   }
->()("TestEmailAdapter") {
+>()("@effect-email/TestEmailAdapter") {
   static readonly layer = (input: typeof TestEmailAdapterInput.Type) => {
     const config = TestEmailAdapterInput.make(input);
     return TestEmailAdapter.of({
@@ -75,7 +75,7 @@ const testEmailAdapterLayer = Layer.effect(
     const policy = yield* SendPolicy;
     const inspection = yield* TestEmailInspection;
     return TestEmailAdapter.layer({ policy, inspection });
-  }),
+  }).pipe(Effect.annotateLogs({ service: "@effect-email/TestEmailAdapter" })),
 );
 
 const testEmailLayer = Layer.effect(
@@ -83,14 +83,17 @@ const testEmailLayer = Layer.effect(
   Effect.gen(function* () {
     const adapter = yield* TestEmailAdapter;
     return Email.layer(adapter);
-  }),
+  }).pipe(Effect.annotateLogs({ service: "@effect-email/Email" })),
 ).pipe(Layer.provideMerge(testEmailAdapterLayer));
 
-const policyLayer: Layer.Layer<SendPolicy> = Layer.succeed(
+export const policyConfig: SendPolicy.Config = SendPolicy.defaultConfig;
+
+export const policyLayer: Layer.Layer<SendPolicy> = Layer.succeed(
   SendPolicy,
-  SendPolicy.defaultLayer,
+  SendPolicy.layer(policyConfig),
 );
 export const layer: Layer.Layer<Email | TestEmailInspection, never, SendPolicy> =
   testEmailLayer.pipe(Layer.provideMerge(testInspectionLayer));
-export const defaultLayer: Layer.Layer<Email | TestEmailInspection | SendPolicy> =
-  layer.pipe(Layer.provideMerge(policyLayer));
+export const defaultLayer: Layer.Layer<Email | TestEmailInspection | SendPolicy> = layer.pipe(
+  Layer.provideMerge(policyLayer),
+);

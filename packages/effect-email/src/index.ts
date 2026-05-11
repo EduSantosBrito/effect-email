@@ -51,6 +51,7 @@ export type MessageBody = Data.TaggedEnum<{
 const MessageBodyVariants = Data.taggedEnum<MessageBody>();
 
 export interface EmailMessage {
+  readonly messageType: "EmailMessage";
   readonly from: Mailbox;
   readonly to: readonly [Mailbox, ...Mailbox[]];
   readonly cc?: readonly [Mailbox, ...Mailbox[]];
@@ -66,19 +67,19 @@ export interface SendReceipt {
   readonly messageId: string;
 }
 
-const MailboxInputSchema = Schema.Struct({
+export const MailboxInput = Schema.Struct({
   address: Schema.Unknown,
   displayName: Schema.optional(Schema.Unknown),
 });
-export type MailboxInput = typeof MailboxInputSchema.Type;
+export type MailboxInput = typeof MailboxInput.Type;
 
-const MessageBodyInputSchema = Schema.Struct({
+export const MessageBodyInput = Schema.Struct({
   text: Schema.optional(Schema.Unknown),
   html: Schema.optional(Schema.Unknown),
 });
-export type MessageBodyInput = typeof MessageBodyInputSchema.Type;
+export type MessageBodyInput = typeof MessageBodyInput.Type;
 
-const AttachmentInputSchema = Schema.Struct({
+export const AttachmentInput = Schema.Struct({
   name: Schema.Unknown,
   mediaType: Schema.Unknown,
   content: Schema.Unknown,
@@ -86,9 +87,10 @@ const AttachmentInputSchema = Schema.Struct({
   url: Schema.optional(Schema.Unknown),
   base64: Schema.optional(Schema.Unknown),
 });
-export type AttachmentInput = typeof AttachmentInputSchema.Type;
+export type AttachmentInput = typeof AttachmentInput.Type;
 
-const EmailMessageInputSchema = Schema.Struct({
+export const EmailMessageInput = Schema.Struct({
+  messageType: Schema.optional(Schema.Unknown),
   from: Schema.Unknown,
   to: Schema.Unknown,
   cc: Schema.optional(Schema.Unknown),
@@ -100,7 +102,7 @@ const EmailMessageInputSchema = Schema.Struct({
   html: Schema.optional(Schema.Unknown),
   attachments: Schema.optional(Schema.Unknown),
 });
-export type EmailMessageInput = typeof EmailMessageInputSchema.Type;
+export type EmailMessageInput = typeof EmailMessageInput.Type;
 
 export class MailboxValidationFailure extends Schema.TaggedErrorClass<MailboxValidationFailure>()(
   "MailboxValidationFailure",
@@ -163,6 +165,8 @@ export class SendPolicyViolation extends Schema.TaggedErrorClass<SendPolicyViola
   {
     reason: Schema.Literals([
       "TooManyRecipients",
+      "EmptyRecipients",
+      "EmptyBody",
       "SubjectTooLarge",
       "TextBodyTooLarge",
       "HtmlBodyTooLarge",
@@ -208,7 +212,7 @@ export type SendFailure =
   | TransportUnavailableFailure
   | ProviderProtocolFailure;
 
-const SendPolicyConfigInputSchema = Schema.Struct({
+export const SendPolicyConfigInput = Schema.Struct({
   maxRecipients: Schema.Number,
   maxSubjectBytes: Schema.Number,
   maxTextBodyBytes: Schema.Number,
@@ -218,7 +222,7 @@ const SendPolicyConfigInputSchema = Schema.Struct({
   maxTotalAttachmentBytes: Schema.Number,
 });
 
-export type SendPolicyConfig = typeof SendPolicyConfigInputSchema.Type;
+export type SendPolicyConfig = typeof SendPolicyConfigInput.Type;
 
 export type EmailSend = (message: EmailMessage) => Effect.Effect<SendReceipt, SendFailure>;
 const EmailSendSchema = Schema.declare<EmailSend>(
@@ -231,10 +235,10 @@ const EmailInput = Schema.Struct({
 const decodeEmailAddress = Schema.decodeUnknownEffect(EmailAddress);
 const decodeDisplayName = Schema.decodeUnknownEffect(DisplayName);
 const decodeMediaType = Schema.decodeUnknownEffect(MediaType);
-const decodeMailboxInput = Schema.decodeUnknownEffect(MailboxInputSchema);
-const decodeMessageBodyInput = Schema.decodeUnknownEffect(MessageBodyInputSchema);
-const decodeAttachmentInput = Schema.decodeUnknownEffect(AttachmentInputSchema);
-const decodeEmailMessageInput = Schema.decodeUnknownEffect(EmailMessageInputSchema);
+const decodeMailboxInput = Schema.decodeUnknownEffect(MailboxInput);
+const decodeMessageBodyInput = Schema.decodeUnknownEffect(MessageBodyInput);
+const decodeAttachmentInput = Schema.decodeUnknownEffect(AttachmentInput);
+const decodeEmailMessageInput = Schema.decodeUnknownEffect(EmailMessageInput);
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
 const hasText = (value: string) => value.trim().length > 0;
@@ -471,6 +475,9 @@ const parseEmailMessage: (
         () => new EmailMessageValidationFailure({ field: "from", reason: "InvalidEmailAddress" }),
       ),
     );
+    if (raw.messageType === "EmailMessage") {
+      return yield* new EmailMessageValidationFailure({ field: "body", reason: "EmptyBody" });
+    }
     if (raw.body !== undefined && (raw.text !== undefined || raw.html !== undefined)) {
       return yield* new EmailMessageValidationFailure({ field: "body", reason: "EmptyBody" });
     }
@@ -499,6 +506,7 @@ const parseEmailMessage: (
     const body = yield* parseMessageBody(bodyInput).pipe(mapContentFailure("body"));
     const attachments = yield* parseAttachments(raw.attachments);
     return {
+      messageType: "EmailMessage",
       from,
       to,
       ...(cc !== undefined ? { cc } : {}),
@@ -543,12 +551,18 @@ const htmlBodyBytes = MessageBody.$match({
   TextAndHtml: ({ html }) => utf8Bytes(html),
 });
 
+const isBodyEmpty = MessageBody.$match({
+  TextOnly: ({ text }) => !hasText(text),
+  HtmlOnly: ({ html }) => !hasText(html),
+  TextAndHtml: ({ text, html }) => !hasText(text) && !hasText(html),
+});
+
 export class SendPolicy extends Context.Service<
   SendPolicy,
   SendPolicyConfig & {
     readonly validate: (message: EmailMessage) => Effect.Effect<EmailMessage, SendPolicyViolation>;
   }
->()("SendPolicy") {
+>()("@effect-email/SendPolicy") {
   static readonly defaultConfig: SendPolicyConfig = {
     maxRecipients: 50,
     maxSubjectBytes: 998,
@@ -560,17 +574,31 @@ export class SendPolicy extends Context.Service<
   };
 
   static readonly layer = (input: Partial<SendPolicyConfig> = {}) => {
-    const config = SendPolicyConfigInputSchema.make({ ...SendPolicy.defaultConfig, ...input });
+    const config = SendPolicyConfigInput.make({ ...SendPolicy.defaultConfig, ...input });
     return SendPolicy.of({
       ...config,
       validate: (message) =>
         Effect.gen(function* () {
           const recipientCount =
             message.to.length + (message.cc?.length ?? 0) + (message.bcc?.length ?? 0);
+          if (recipientCount === 0) {
+            return yield* new SendPolicyViolation({
+              reason: "EmptyRecipients",
+              limit: 1,
+              retryable: false,
+            });
+          }
           if (recipientCount > config.maxRecipients) {
             return yield* new SendPolicyViolation({
               reason: "TooManyRecipients",
               limit: config.maxRecipients,
+              retryable: false,
+            });
+          }
+          if (isBodyEmpty(message.body)) {
+            return yield* new SendPolicyViolation({
+              reason: "EmptyBody",
+              limit: 1,
               retryable: false,
             });
           }
@@ -629,12 +657,16 @@ export class SendPolicy extends Context.Service<
   static readonly defaultLayer = SendPolicy.layer(SendPolicy.defaultConfig);
 }
 
+export namespace SendPolicy {
+  export type Config = SendPolicyConfig;
+}
+
 export class Email extends Context.Service<
   Email,
   {
     readonly send: (message: EmailMessage) => Effect.Effect<SendReceipt, SendFailure>;
   }
->()("Email") {
+>()("@effect-email/Email") {
   static readonly layer = (input: typeof EmailInput.Type) => {
     const config = EmailInput.make(input);
     return Email.of({ ...config });

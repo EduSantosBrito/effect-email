@@ -16,7 +16,7 @@
       "@typescript/native-preview": "latest",
       "bun-types": "1.3.13",
       "effect": "^4.0.0-beta.64",
-      "effect-rules": "^0.2.1",
+      "effect-rules": "^0.3.0",
       "knip": "^5.69.1",
       "oxfmt": "^0.48.0",
       "oxlint": "^1.63.0",
@@ -27,8 +27,8 @@
   "scripts": {
     "build": "bun --filter effect-email build",
     "check": "bun run build && bun --filter effect-email check && bun --filter effect-email-resend-example check",
-    "format": "bun --bun oxfmt -c .oxlintrc.json",
-    "format:check": "bun --bun oxfmt --check -c .oxlintrc.json",
+    "format": "bun --bun oxfmt -c oxlint.config.ts",
+    "format:check": "bun --bun oxfmt --check -c oxlint.config.ts",
     "lint": "bun --filter effect-email lint",
     "package:smoke": "bun run --cwd packages/effect-email package:smoke",
     "changeset": "npm exec --package @changesets/cli@2.31.0 -- changeset",
@@ -38,6 +38,7 @@
   },
   "devDependencies": {
     "effect-rules": "catalog:",
-    "oxfmt": "catalog:"
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:"
   }
 }

@@ -19,7 +19,7 @@ import {
 } from "./index";
 import { requestBody } from "./internal/resend-request";
 
-const ResendConfigInput = Schema.Struct({
+export const ResendConfigInput = Schema.Struct({
   apiKey: Schema.Redacted(Schema.String),
 });
 export type ResendConfigInput = typeof ResendConfigInput.Type;
@@ -28,13 +28,16 @@ export interface ResendConfigShape {
   readonly apiKey: Redacted.Redacted<string>;
 }
 
-const config: Config.Config<ResendConfigInput> = Config.map(
+export const config: Config.Config<ResendConfigInput> = Config.map(
   Config.nonEmptyString("RESEND_API_KEY"),
   (apiKey) => ({ apiKey: Redacted.make(apiKey) }),
 );
 
-const HttpClientInput = Schema.declare<HttpClient.HttpClient>((input): input is HttpClient.HttpClient =>
-  input !== undefined && input !== null,
+export const makeConfig = (apiKey: string): ResendConfigInput =>
+  ResendConfigInput.make({ apiKey: Redacted.make(apiKey) });
+
+const HttpClientInput = Schema.declare<HttpClient.HttpClient>(
+  (input): input is HttpClient.HttpClient => input !== undefined && input !== null,
 );
 
 const ResendConfigServiceInput = Schema.declare<typeof ResendConfig.Service>(
@@ -54,7 +57,7 @@ export class ResendConfig extends Context.Service<
   {
     readonly apiKey: Redacted.Redacted<string>;
   }
->()("ResendConfig") {
+>()("@effect-email/ResendConfig") {
   static readonly layer = (input: typeof ResendConfigInput.Type) =>
     Layer.succeed(ResendConfig)(ResendConfigInput.make(input));
 }
@@ -64,17 +67,13 @@ export class ResendClient extends Context.Service<
   {
     readonly send: (message: EmailMessage) => Effect.Effect<SendReceipt, SendFailure>;
   }
->()("ResendClient") {
+>()("@effect-email/ResendClient") {
   static readonly layer = (input: typeof ResendClientInput.Type) => {
     const config = ResendClientInput.make(input);
     return ResendClient.of({
       ...config,
       send: (message) =>
-        executeResendSend(
-          config.client,
-          Redacted.value(config.resend.apiKey),
-          message,
-        ),
+        executeResendSend(config.client, Redacted.value(config.resend.apiKey), message),
     });
   };
 }
@@ -134,9 +133,11 @@ const executeResendSend = (
     ),
   );
 
-const policyLayer: Layer.Layer<SendPolicy> = Layer.succeed(
+export const policyConfig: SendPolicy.Config = SendPolicy.defaultConfig;
+
+export const policyLayer: Layer.Layer<SendPolicy> = Layer.succeed(
   SendPolicy,
-  SendPolicy.defaultLayer,
+  SendPolicy.layer(policyConfig),
 );
 
 export const clientLayer: Layer.Layer<ResendClient, Config.ConfigError, HttpClient.HttpClient> =
@@ -146,7 +147,7 @@ export const clientLayer: Layer.Layer<ResendClient, Config.ConfigError, HttpClie
       const client = yield* HttpClient.HttpClient;
       const resend = yield* ResendConfig;
       return ResendClient.layer({ client, resend });
-    }),
+    }).pipe(Effect.annotateLogs({ service: "@effect-email/ResendClient" })),
   ).pipe(
     Layer.provide(
       Layer.unwrap(config.asEffect().pipe(Effect.map((input) => ResendConfig.layer(input)))),
@@ -161,7 +162,7 @@ export const layer: Layer.Layer<Email, never, ResendClient | SendPolicy> = Layer
     return Email.layer({
       send: (message) => policy.validate(message).pipe(Effect.flatMap(resend.send)),
     });
-  }),
+  }).pipe(Effect.annotateLogs({ service: "@effect-email/Email" })),
 );
 
 export const defaultLayer: Layer.Layer<Email, Config.ConfigError> = layer.pipe(
