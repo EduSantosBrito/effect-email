@@ -54,6 +54,18 @@ A named content part included with an **Email Message**.
 Caller-supplied in-memory bytes for an **Attachment**.
 _Avoid_: Attachment file path, attachment URL, base64 attachment string
 
+**Email Header**:
+A validated provider-neutral header field on an **Email Message** that is not controlled by addressing, content, MIME, authentication, or transport delivery semantics.
+_Avoid_: Raw header, provider header option
+
+**Email Header Name**:
+A strict ASCII token identifying an **Email Header**.
+_Avoid_: Header line, colon-prefixed name
+
+**Email Header Value**:
+A single-line text value for an **Email Header**.
+_Avoid_: Folded header value, multi-line header value
+
 **Media Type**:
 A parsed MIME type that identifies **Attachment Content**.
 _Avoid_: Content-type string
@@ -112,13 +124,22 @@ A deferred **Transport Adapter** for direct SMTP delivery, intentionally exclude
 - The MVP **Email Message** surface includes from, to, cc, bcc, reply-to, subject, text, HTML, and **Attachments**.
 - The MVP excludes custom headers, tags, scheduling, batch sending, templates, idempotency keys, webhooks, and provider metadata.
 - An **Email Message** has at least one non-empty body: text, HTML, or both.
+- An **Email Message** may contain **Email Headers** as an ordered list.
 - An **Email Message** contains **Parsed Email Fields**, not raw external input.
 - A **Parsed Email Field** is created through Effect-returning decoding, not through throwing constructors.
 - An **HTML Body** is not sanitized by the SDK.
 - A **Send Policy** enforces local limits for recipients, subject length, body size, attachment count, and attachment bytes.
+- A **Send Policy** enforces local limits for **Email Header** count, header name bytes, header value bytes, and total header bytes.
 - An **Attachment** contains **Attachment Content**, not a file path or URL for the SDK to read.
 - **Attachment Content** is raw bytes; base64 and MIME encoding are adapter concerns.
 - An **Attachment** declares a **Media Type**, not an arbitrary content-type string.
+- An **Email Header** is allowed only when it does not override structured **Email Message** fields or transport-controlled behavior.
+- An **Email Header** has one **Email Header Name** and one **Email Header Value**.
+- An **Email Message** rejects duplicate **Email Header Names**.
+- An **Email Header Name** cannot be a structured message field, MIME control field, authentication field, delivery trace field, or provider-reserved field.
+- An **Email Header Name** is stored trimmed with caller casing preserved, but duplicate and forbidden-name checks use a lowercase comparison key.
+- An **Email Header Value** preserves caller text but must be non-blank and single-line.
+- Raw **Email Header** input may be a convenience record or ordered list, but stored **Email Message** state is always an ordered list.
 
 ## Example Dialogue
 
@@ -161,6 +182,30 @@ A deferred **Transport Adapter** for direct SMTP delivery, intentionally exclude
 > **Dev:** "Should callers pass base64 attachments?"
 > **Domain expert:** "No. Callers pass raw bytes and adapters encode for their transport."
 
+> **Dev:** "Are custom headers the next email surface to add?"
+> **Domain expert:** "Yes, if they are validated as Email Headers and cannot override structured message or transport-controlled fields."
+
+> **Dev:** "Are Email Headers a Resend-only option?"
+> **Domain expert:** "No. They belong to the core Email Message as ordered provider-neutral message state."
+
+> **Dev:** "Can the same Email Header Name appear twice?"
+> **Domain expert:** "No, not yet. Resend maps headers as an object, so duplicates are rejected until a provider-neutral duplicate-header story exists."
+
+> **Dev:** "Can users set From, Subject, Message-ID, DKIM-Signature, or Resend-* through Email Headers?"
+> **Domain expert:** "No. Those are structured, MIME, authentication, delivery, or provider-reserved fields, not user Email Headers."
+
+> **Dev:** "Should Email Header Names be lowercased in stored messages?"
+> **Domain expert:** "No. Trim and preserve casing for output, but compare using lowercase keys."
+
+> **Dev:** "Should Email Header Values be trimmed?"
+> **Domain expert:** "No. Preserve caller text, but reject blank or multi-line values."
+
+> **Dev:** "Can callers pass headers as an object?"
+> **Domain expert:** "Yes, as constructor input only. Stored Email Messages use an ordered Email Header list."
+
+> **Dev:** "Do Email Headers only need constructor validation?"
+> **Domain expert:** "No. Constructors validate safety and meaning; Send Policy enforces local header count and byte limits before transport."
+
 > **Dev:** "Can we let Resend reject oversized emails?"
 > **Domain expert:** "No. The SDK enforces a local Send Policy before calling the transport."
 
@@ -196,3 +241,4 @@ A deferred **Transport Adapter** for direct SMTP delivery, intentionally exclude
 - "layer" was used to mean provider implementation; resolved: canonical term is **Transport Adapter**, exposed through Effect Layers.
 - "full email surface" was used broadly; resolved: the core **Email Message** surface is provider-neutral, not Resend-shaped.
 - "delivery" was used ambiguously; resolved: v0 only models provider acceptance as a **Send Receipt**.
+- "custom headers" was used broadly; resolved: canonical term is **Email Header**, limited to validated provider-neutral header fields.
