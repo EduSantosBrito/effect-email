@@ -10,6 +10,9 @@ import {
   Attachment,
   DisplayName,
   Email,
+  EmailHeader,
+  EmailHeaderName,
+  EmailHeaderValue,
   EmailAddress,
   EmailMessage,
   Mailbox,
@@ -34,24 +37,29 @@ const makeMessage = (input: Partial<EmailMessageInput> = {}) =>
 const ResendRequestBodySchema = Schema.Struct({
   from: Schema.String,
   to: Schema.Array(Schema.String),
-  cc: Schema.Array(Schema.String),
-  bcc: Schema.Array(Schema.String),
-  reply_to: Schema.Array(Schema.String),
+  cc: Schema.optional(Schema.Array(Schema.String)),
+  bcc: Schema.optional(Schema.Array(Schema.String)),
+  reply_to: Schema.optional(Schema.Array(Schema.String)),
   subject: Schema.String,
   text: Schema.String,
-  html: Schema.String,
-  attachments: Schema.Array(
-    Schema.Struct({
-      filename: Schema.String,
-      content_type: Schema.String,
-      content: Schema.String,
-    }),
+  html: Schema.optional(Schema.String),
+  attachments: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        filename: Schema.String,
+        content_type: Schema.String,
+        content: Schema.String,
+      }),
+    ),
   ),
+  headers: Schema.optional(Schema.Record(Schema.String, Schema.String)),
 });
 
 const decodeResendRequestBody = Schema.decodeUnknownEffect(ResendRequestBodySchema);
 const decodeEmailAddress = Schema.decodeUnknownEffect(EmailAddress);
 const decodeDisplayName = Schema.decodeUnknownEffect(DisplayName);
+const decodeEmailHeaderName = Schema.decodeUnknownEffect(EmailHeaderName);
+const decodeEmailHeaderValue = Schema.decodeUnknownEffect(EmailHeaderValue);
 const decodeMediaType = Schema.decodeUnknownEffect(MediaType);
 
 const provideResend = (
@@ -109,6 +117,68 @@ describe("effect-email constructors", () => {
       }).pipe(Effect.provide(TestEmail.defaultLayer));
 
       assert.deepStrictEqual(receipt, { provider: "test", messageId: "test-message-id" });
+    }),
+  );
+
+  it.effect("parses provider-neutral email headers", () =>
+    Effect.gen(function* () {
+      const recordMessage = yield* makeMessage({
+        headers: { "X-Campaign-ID": "spring-2026" },
+      });
+      assert.deepStrictEqual(recordMessage.headers, [
+        { name: "X-Campaign-ID", value: "spring-2026" },
+      ]);
+
+      const orderedMessage = yield* makeMessage({
+        headers: [
+          { name: " X-Trace-ID ", value: "  keep spacing  " },
+          { name: "X-Campaign-ID", value: "spring-2026" },
+        ],
+      });
+      assert.deepStrictEqual(orderedMessage.headers, [
+        { name: "X-Trace-ID", value: "  keep spacing  " },
+        { name: "X-Campaign-ID", value: "spring-2026" },
+      ]);
+
+      assert.deepStrictEqual(yield* EmailHeader.make({ name: " X-Trace-ID ", value: "value" }), {
+        name: "X-Trace-ID",
+        value: "value",
+      });
+      assert.strictEqual(yield* decodeEmailHeaderName("X-Trace-ID"), "X-Trace-ID");
+      assert.strictEqual(yield* decodeEmailHeaderValue("  value  "), "  value  ");
+    }),
+  );
+
+  it.effect("rejects unsafe email headers", () =>
+    Effect.gen(function* () {
+      const cases: ReadonlyArray<readonly [unknown, string]> = [
+        [{ name: "Bad Header", value: "value" }, "InvalidHeaderName"],
+        [{ name: "Subject", value: "value" }, "ForbiddenHeaderName"],
+        [{ name: "Resend-Tag", value: "value" }, "ForbiddenHeaderName"],
+        [{ name: "X-Resend-Tag", value: "value" }, "ForbiddenHeaderName"],
+        [{ name: "X-Blank", value: " " }, "InvalidHeaderValue"],
+        [{ name: "X-Multiline", value: "one\ntwo" }, "InvalidHeaderValue"],
+        [{ name: "X-Control", value: "bad\u0007" }, "InvalidHeaderValue"],
+        [{ name: "Bad\u0007", value: "value" }, "InvalidHeaderName"],
+      ];
+
+      for (const [input, reason] of cases) {
+        const headerFailure = yield* EmailHeader.make(input).pipe(Effect.flip);
+        assert.strictEqual(headerFailure.reason, reason);
+
+        const messageFailure = yield* makeMessage({ headers: [input] }).pipe(Effect.flip);
+        assert.strictEqual(messageFailure.field, "headers");
+        assert.strictEqual(messageFailure.reason, reason);
+      }
+
+      const duplicateFailure = yield* makeMessage({
+        headers: [
+          { name: "X-Trace-ID", value: "one" },
+          { name: "x-trace-id", value: "two" },
+        ],
+      }).pipe(Effect.flip);
+      assert.strictEqual(duplicateFailure.field, "headers");
+      assert.strictEqual(duplicateFailure.reason, "DuplicateHeaderName");
     }),
   );
 
@@ -196,6 +266,10 @@ describe("effect-email policy and test adapter", () => {
         [{ maxAttachments: 0 }, "TooManyAttachments"],
         [{ maxAttachmentBytes: 1 }, "AttachmentTooLarge"],
         [{ maxTotalAttachmentBytes: 1 }, "TotalAttachmentsTooLarge"],
+        [{ maxHeaders: 1 }, "TooManyHeaders"],
+        [{ maxHeaderNameBytes: 5 }, "HeaderNameTooLarge"],
+        [{ maxHeaderValueBytes: 5 }, "HeaderValueTooLarge"],
+        [{ maxTotalHeaderBytes: 10 }, "TotalHeadersTooLarge"],
       ];
       const policyMessage = yield* makeMessage({
         html: "Plain html",
@@ -204,6 +278,10 @@ describe("effect-email policy and test adapter", () => {
           mediaType: "text/plain",
           content: new Uint8Array([104, 105]),
         },
+        headers: [
+          { name: "X-Trace-ID", value: "trace-value" },
+          { name: "X-Campaign-ID", value: "spring-2026" },
+        ],
       });
       for (const [config, reason] of policyCases) {
         const failure = yield* Effect.gen(function* () {
@@ -248,6 +326,37 @@ describe("effect-email policy and test adapter", () => {
       }).pipe(Effect.provide(TestEmail.defaultLayer));
     }),
   );
+
+  it.effect("records accepted headers and skips recording on header policy failure", () =>
+    Effect.gen(function* () {
+      const message = yield* makeMessage({ headers: { "X-Campaign-ID": "spring-2026" } });
+      yield* Effect.gen(function* () {
+        const email = yield* Email;
+        const inspection = yield* TestEmail.TestEmailInspection;
+        yield* email.send(message);
+        assert.deepStrictEqual((yield* inspection.sent)[0]?.headers, [
+          { name: "X-Campaign-ID", value: "spring-2026" },
+        ]);
+      }).pipe(Effect.provide(TestEmail.defaultLayer));
+
+      yield* Effect.gen(function* () {
+        const email = yield* Email;
+        const inspection = yield* TestEmail.TestEmailInspection;
+        const failure = yield* email.send(message).pipe(Effect.flip);
+        assert.ok(Predicate.isTagged(failure, "SendPolicyViolation"));
+        if (Predicate.isTagged(failure, "SendPolicyViolation")) {
+          assert.strictEqual(failure.reason, "TooManyHeaders");
+        }
+        assert.deepStrictEqual(yield* inspection.sent, []);
+      }).pipe(
+        Effect.provide(
+          TestEmail.layer.pipe(
+            Layer.provide(Layer.succeed(SendPolicy)(SendPolicy.layer({ maxHeaders: 0 }))),
+          ),
+        ),
+      );
+    }),
+  );
 });
 
 describe("effect-email Resend adapter", () => {
@@ -263,6 +372,10 @@ describe("effect-email Resend adapter", () => {
           mediaType: "text/plain",
           content: new Uint8Array([104, 105]),
         },
+        headers: [
+          { name: "X-Trace-ID", value: "  keep spacing  " },
+          { name: "X-Campaign-ID", value: "spring-2026" },
+        ],
       });
 
       const body = yield* decodeResendRequestBody(requestBody(message));
@@ -278,6 +391,13 @@ describe("effect-email Resend adapter", () => {
       assert.deepStrictEqual(body.attachments, [
         { filename: "report.txt", content_type: "text/plain", content: "aGk=" },
       ]);
+      assert.deepStrictEqual(body.headers, {
+        "X-Trace-ID": "  keep spacing  ",
+        "X-Campaign-ID": "spring-2026",
+      });
+
+      const bodyWithoutHeaders = yield* decodeResendRequestBody(requestBody(yield* makeMessage()));
+      assert.strictEqual(bodyWithoutHeaders.headers, undefined);
     }),
   );
 

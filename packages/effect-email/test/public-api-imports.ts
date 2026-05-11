@@ -5,6 +5,12 @@ import {
   DisplayName,
   Email,
   EmailAddress,
+  EmailHeader,
+  EmailHeaderInput,
+  EmailHeaderName,
+  EmailHeaderValidationFailure,
+  EmailHeadersRecordInput,
+  EmailHeaderValue,
   EmailMessage,
   EmailMessageInput,
   EmailMessageValidationFailure,
@@ -26,6 +32,11 @@ import {
   type AttachmentInput as AttachmentInputShape,
   type DisplayName as DisplayNameShape,
   type EmailAddress as EmailAddressShape,
+  type EmailHeader as EmailHeaderShape,
+  type EmailHeaderInput as EmailHeaderInputShape,
+  type EmailHeaderName as EmailHeaderNameShape,
+  type EmailHeadersRecordInput as EmailHeadersRecordInputShape,
+  type EmailHeaderValue as EmailHeaderValueShape,
   type EmailMessage as EmailMessageShape,
   type EmailMessageInput as EmailMessageInputShape,
   type EmailSend,
@@ -68,6 +79,12 @@ type PublicApiContract = {
     | typeof DisplayName
     | typeof Email
     | typeof EmailAddress
+    | typeof EmailHeader
+    | typeof EmailHeaderInput
+    | typeof EmailHeaderName
+    | typeof EmailHeaderValidationFailure
+    | typeof EmailHeadersRecordInput
+    | typeof EmailHeaderValue
     | typeof EmailMessage
     | typeof EmailMessageInput
     | typeof EmailMessageValidationFailure
@@ -89,6 +106,11 @@ type PublicApiContract = {
     | AttachmentInputShape
     | DisplayNameShape
     | EmailAddressShape
+    | EmailHeaderShape
+    | EmailHeaderInputShape
+    | EmailHeaderNameShape
+    | EmailHeadersRecordInputShape
+    | EmailHeaderValueShape
     | EmailMessageShape
     | EmailMessageInputShape
     | EmailSend

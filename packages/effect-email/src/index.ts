@@ -4,6 +4,28 @@ const addressPattern =
   /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
 const mediaTypePattern =
   /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*(?:\s*;\s*[A-Za-z0-9!#$&^_.+-]+=[A-Za-z0-9!#$&^_.+-]+)*$/;
+const headerNamePattern = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+const forbiddenHeaderNames = new Set([
+  "bcc",
+  "cc",
+  "content-disposition",
+  "content-id",
+  "content-transfer-encoding",
+  "content-type",
+  "date",
+  "dkim-signature",
+  "from",
+  "in-reply-to",
+  "message-id",
+  "mime-version",
+  "received",
+  "references",
+  "reply-to",
+  "return-path",
+  "sender",
+  "subject",
+  "to",
+]);
 
 const hasControlCharacter = (value: string): boolean => {
   for (const character of value) {
@@ -30,6 +52,21 @@ export const MediaType = Schema.String.check(Schema.isPattern(mediaTypePattern))
   Schema.brand("MediaType"),
 );
 export type MediaType = typeof MediaType.Type;
+export const EmailHeaderName = Schema.String.check(
+  Schema.isNonEmpty(),
+  Schema.isPattern(headerNamePattern),
+  Schema.makeFilter((value: string) => !hasControlCharacter(value), {
+    expected: "a header token with no control characters",
+  }),
+).pipe(Schema.brand("EmailHeaderName"));
+export type EmailHeaderName = typeof EmailHeaderName.Type;
+export const EmailHeaderValue = Schema.String.check(
+  Schema.isNonEmpty(),
+  Schema.makeFilter((value: string) => !hasControlCharacter(value), {
+    expected: "a single-line header value with no control characters",
+  }),
+).pipe(Schema.brand("EmailHeaderValue"));
+export type EmailHeaderValue = typeof EmailHeaderValue.Type;
 
 export interface Mailbox {
   readonly address: EmailAddress;
@@ -40,6 +77,11 @@ export interface Attachment {
   readonly name: string;
   readonly mediaType: MediaType;
   readonly content: Uint8Array;
+}
+
+export interface EmailHeader {
+  readonly name: EmailHeaderName;
+  readonly value: EmailHeaderValue;
 }
 
 export type MessageBody = Data.TaggedEnum<{
@@ -60,6 +102,7 @@ export interface EmailMessage {
   readonly subject: string;
   readonly body: MessageBody;
   readonly attachments?: readonly [Attachment, ...Attachment[]];
+  readonly headers?: readonly [EmailHeader, ...EmailHeader[]];
 }
 
 export interface SendReceipt {
@@ -89,6 +132,15 @@ export const AttachmentInput = Schema.Struct({
 });
 export type AttachmentInput = typeof AttachmentInput.Type;
 
+export const EmailHeaderInput = Schema.Struct({
+  name: Schema.Unknown,
+  value: Schema.Unknown,
+});
+export type EmailHeaderInput = typeof EmailHeaderInput.Type;
+
+export const EmailHeadersRecordInput = Schema.Record(Schema.String, Schema.Unknown);
+export type EmailHeadersRecordInput = typeof EmailHeadersRecordInput.Type;
+
 export const EmailMessageInput = Schema.Struct({
   messageType: Schema.optional(Schema.Unknown),
   from: Schema.Unknown,
@@ -101,6 +153,7 @@ export const EmailMessageInput = Schema.Struct({
   text: Schema.optional(Schema.Unknown),
   html: Schema.optional(Schema.Unknown),
   attachments: Schema.optional(Schema.Unknown),
+  headers: Schema.optional(Schema.Unknown),
 });
 export type EmailMessageInput = typeof EmailMessageInput.Type;
 
@@ -143,6 +196,7 @@ export class EmailMessageValidationFailure extends Schema.TaggedErrorClass<Email
       "subject",
       "body",
       "attachments",
+      "headers",
     ]),
     reason: Schema.Literals([
       "InvalidEmailAddress",
@@ -156,6 +210,22 @@ export class EmailMessageValidationFailure extends Schema.TaggedErrorClass<Email
       "InvalidAttachmentName",
       "InvalidMediaType",
       "InvalidAttachmentContent",
+      "InvalidHeaderName",
+      "ForbiddenHeaderName",
+      "DuplicateHeaderName",
+      "InvalidHeaderValue",
+    ]),
+  },
+) {}
+
+export class EmailHeaderValidationFailure extends Schema.TaggedErrorClass<EmailHeaderValidationFailure>()(
+  "EmailHeaderValidationFailure",
+  {
+    reason: Schema.Literals([
+      "InvalidHeaderName",
+      "ForbiddenHeaderName",
+      "DuplicateHeaderName",
+      "InvalidHeaderValue",
     ]),
   },
 ) {}
@@ -173,6 +243,10 @@ export class SendPolicyViolation extends Schema.TaggedErrorClass<SendPolicyViola
       "TooManyAttachments",
       "AttachmentTooLarge",
       "TotalAttachmentsTooLarge",
+      "TooManyHeaders",
+      "HeaderNameTooLarge",
+      "HeaderValueTooLarge",
+      "TotalHeadersTooLarge",
     ]),
     limit: Schema.Number,
     retryable: Schema.Literal(false),
@@ -220,6 +294,10 @@ export const SendPolicyConfigInput = Schema.Struct({
   maxAttachments: Schema.Number,
   maxAttachmentBytes: Schema.Number,
   maxTotalAttachmentBytes: Schema.Number,
+  maxHeaders: Schema.Number,
+  maxHeaderNameBytes: Schema.Number,
+  maxHeaderValueBytes: Schema.Number,
+  maxTotalHeaderBytes: Schema.Number,
 });
 
 export type SendPolicyConfig = typeof SendPolicyConfigInput.Type;
@@ -235,9 +313,13 @@ const EmailInput = Schema.Struct({
 const decodeEmailAddress = Schema.decodeUnknownEffect(EmailAddress);
 const decodeDisplayName = Schema.decodeUnknownEffect(DisplayName);
 const decodeMediaType = Schema.decodeUnknownEffect(MediaType);
+const decodeEmailHeaderName = Schema.decodeUnknownEffect(EmailHeaderName);
+const decodeEmailHeaderValue = Schema.decodeUnknownEffect(EmailHeaderValue);
 const decodeMailboxInput = Schema.decodeUnknownEffect(MailboxInput);
 const decodeMessageBodyInput = Schema.decodeUnknownEffect(MessageBodyInput);
 const decodeAttachmentInput = Schema.decodeUnknownEffect(AttachmentInput);
+const decodeEmailHeaderInput = Schema.decodeUnknownEffect(EmailHeaderInput);
+const decodeEmailHeadersRecordInput = Schema.decodeUnknownEffect(EmailHeadersRecordInput);
 const decodeEmailMessageInput = Schema.decodeUnknownEffect(EmailMessageInput);
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
@@ -245,6 +327,11 @@ const hasText = (value: string) => value.trim().length > 0;
 const stringMailboxPattern = /^([^<>,;@]+)<([^<>]+)>$/u;
 
 const normalizeAddress = (address: string): string => address.toLowerCase();
+
+const isForbiddenHeaderName = (name: string): boolean => {
+  const key = name.toLowerCase();
+  return forbiddenHeaderNames.has(key) || key.startsWith("resend-") || key.startsWith("x-resend-");
+};
 
 const isOptionInput = (input: unknown): input is Option.Option<unknown> => Option.isOption(input);
 
@@ -433,6 +520,89 @@ const parseAttachment: (
   },
 );
 
+const parseEmailHeaderName: (
+  input: unknown,
+) => Effect.Effect<EmailHeaderName, EmailHeaderValidationFailure> = Effect.fnUntraced(
+  function* (input) {
+    if (typeof input !== "string") {
+      return yield* new EmailHeaderValidationFailure({ reason: "InvalidHeaderName" });
+    }
+    const name = input.trim();
+    if (!headerNamePattern.test(name) || hasControlCharacter(name)) {
+      return yield* new EmailHeaderValidationFailure({ reason: "InvalidHeaderName" });
+    }
+    if (isForbiddenHeaderName(name)) {
+      return yield* new EmailHeaderValidationFailure({ reason: "ForbiddenHeaderName" });
+    }
+    return yield* decodeEmailHeaderName(name).pipe(
+      Effect.mapError(() => new EmailHeaderValidationFailure({ reason: "InvalidHeaderName" })),
+    );
+  },
+);
+
+const parseEmailHeaderValue: (
+  input: unknown,
+) => Effect.Effect<EmailHeaderValue, EmailHeaderValidationFailure> = Effect.fnUntraced(
+  function* (input) {
+    if (
+      typeof input !== "string" ||
+      !hasText(input) ||
+      input.includes("\r") ||
+      input.includes("\n") ||
+      hasControlCharacter(input)
+    ) {
+      return yield* new EmailHeaderValidationFailure({ reason: "InvalidHeaderValue" });
+    }
+    return yield* decodeEmailHeaderValue(input).pipe(
+      Effect.mapError(() => new EmailHeaderValidationFailure({ reason: "InvalidHeaderValue" })),
+    );
+  },
+);
+
+const parseEmailHeader: (
+  input: unknown,
+) => Effect.Effect<EmailHeader, EmailHeaderValidationFailure> = Effect.fnUntraced(
+  function* (input) {
+    const raw = yield* decodeEmailHeaderInput(input).pipe(
+      Effect.mapError(() => new EmailHeaderValidationFailure({ reason: "InvalidHeaderName" })),
+    );
+    return {
+      name: yield* parseEmailHeaderName(raw.name),
+      value: yield* parseEmailHeaderValue(raw.value),
+    };
+  },
+);
+
+const parseEmailHeaders: (
+  input: unknown,
+) => Effect.Effect<
+  readonly [EmailHeader, ...EmailHeader[]] | undefined,
+  EmailHeaderValidationFailure
+> = Effect.fnUntraced(function* (input) {
+  const value = optionalValue(input);
+  if (value === undefined) return undefined;
+  const rawHeaders = Array.isArray(value)
+    ? value
+    : Object.entries(
+        yield* decodeEmailHeadersRecordInput(value).pipe(
+          Effect.mapError(() => new EmailHeaderValidationFailure({ reason: "InvalidHeaderName" })),
+        ),
+      ).map(([name, headerValue]) => ({ name, value: headerValue }));
+  if (rawHeaders.length === 0) return undefined;
+  const head = yield* parseEmailHeader(rawHeaders[0]);
+  const tail = yield* Effect.all(rawHeaders.slice(1).map(parseEmailHeader));
+  const headers: readonly [EmailHeader, ...EmailHeader[]] = [head, ...tail];
+  const seen = new Set<string>();
+  for (const header of headers) {
+    const key = header.name.toLowerCase();
+    if (seen.has(key)) {
+      return yield* new EmailHeaderValidationFailure({ reason: "DuplicateHeaderName" });
+    }
+    seen.add(key);
+  }
+  return headers;
+});
+
 const mapMailboxFailure = (field: EmailMessageValidationFailure["field"]) =>
   Effect.mapError(
     (failure: MailboxValidationFailure) =>
@@ -444,6 +614,11 @@ const mapContentFailure = (field: EmailMessageValidationFailure["field"]) =>
     (failure: MessageContentValidationFailure) =>
       new EmailMessageValidationFailure({ field, reason: failure.reason }),
   );
+
+const mapHeaderFailure = Effect.mapError(
+  (failure: EmailHeaderValidationFailure) =>
+    new EmailMessageValidationFailure({ field: "headers", reason: failure.reason }),
+);
 
 const parseMessageMailboxList: (
   field: "to" | "cc" | "bcc" | "replyTo",
@@ -464,6 +639,15 @@ const parseAttachments: (
   const value = optionalValue(input);
   if (value === undefined) return undefined;
   return yield* nonEmptyAttachmentArray(value).pipe(mapContentFailure("attachments"));
+});
+
+const parseMessageHeaders: (
+  input: unknown,
+) => Effect.Effect<
+  readonly [EmailHeader, ...EmailHeader[]] | undefined,
+  EmailMessageValidationFailure
+> = Effect.fnUntraced(function* (input) {
+  return yield* parseEmailHeaders(input).pipe(mapHeaderFailure);
 });
 
 const parseEmailMessage: (
@@ -505,6 +689,7 @@ const parseEmailMessage: (
     const bodyInput = raw.body === undefined ? { text: raw.text, html: raw.html } : raw.body;
     const body = yield* parseMessageBody(bodyInput).pipe(mapContentFailure("body"));
     const attachments = yield* parseAttachments(raw.attachments);
+    const headers = yield* parseMessageHeaders(raw.headers);
     return {
       messageType: "EmailMessage",
       from,
@@ -515,6 +700,7 @@ const parseEmailMessage: (
       subject,
       body,
       ...(attachments !== undefined ? { attachments } : {}),
+      ...(headers !== undefined ? { headers } : {}),
     };
   },
 );
@@ -533,6 +719,10 @@ export const MessageBody = {
 
 export const Attachment = {
   make: parseAttachment,
+};
+
+export const EmailHeader = {
+  make: parseEmailHeader,
 };
 
 export const EmailMessage = {
@@ -571,6 +761,10 @@ export class SendPolicy extends Context.Service<
     maxAttachments: 10,
     maxAttachmentBytes: 10_000_000,
     maxTotalAttachmentBytes: 40_000_000,
+    maxHeaders: 20,
+    maxHeaderNameBytes: 128,
+    maxHeaderValueBytes: 998,
+    maxTotalHeaderBytes: 8000,
   };
 
   static readonly layer = (input: Partial<SendPolicyConfig> = {}) => {
@@ -646,6 +840,41 @@ export class SendPolicy extends Context.Service<
             return yield* new SendPolicyViolation({
               reason: "TotalAttachmentsTooLarge",
               limit: config.maxTotalAttachmentBytes,
+              retryable: false,
+            });
+          }
+          const headers = message.headers ?? [];
+          if (headers.length > config.maxHeaders) {
+            return yield* new SendPolicyViolation({
+              reason: "TooManyHeaders",
+              limit: config.maxHeaders,
+              retryable: false,
+            });
+          }
+          let totalHeaderBytes = 0;
+          for (const header of headers) {
+            const nameBytes = utf8Bytes(header.name);
+            if (nameBytes > config.maxHeaderNameBytes) {
+              return yield* new SendPolicyViolation({
+                reason: "HeaderNameTooLarge",
+                limit: config.maxHeaderNameBytes,
+                retryable: false,
+              });
+            }
+            const valueBytes = utf8Bytes(header.value);
+            if (valueBytes > config.maxHeaderValueBytes) {
+              return yield* new SendPolicyViolation({
+                reason: "HeaderValueTooLarge",
+                limit: config.maxHeaderValueBytes,
+                retryable: false,
+              });
+            }
+            totalHeaderBytes += nameBytes + valueBytes;
+          }
+          if (totalHeaderBytes > config.maxTotalHeaderBytes) {
+            return yield* new SendPolicyViolation({
+              reason: "TotalHeadersTooLarge",
+              limit: config.maxTotalHeaderBytes,
               retryable: false,
             });
           }
