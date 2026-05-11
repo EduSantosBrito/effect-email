@@ -8,12 +8,15 @@
   "scripts": {
     "build": "bun --filter effect-email build",
     "check": "bun run build && bun --filter effect-email check && bun --filter effect-email-resend-example check",
-    "format": "bun --bun oxfmt --write package.json tsconfig.json README.md packages/effect-email/package.json packages/effect-email/tsconfig.json packages/effect-email/src examples/resend/package.json examples/resend/tsconfig.json examples/resend/README.md examples/resend/src",
-    "format:check": "bun --bun oxfmt --check package.json tsconfig.json README.md packages/effect-email/package.json packages/effect-email/tsconfig.json packages/effect-email/src examples/resend/package.json examples/resend/tsconfig.json examples/resend/README.md examples/resend/src",
+    "format": "bun --bun oxfmt -c .oxlintrc.json",
+    "format:check": "bun --bun oxfmt --check -c .oxlintrc.json",
     "lint": "bun --filter effect-email lint",
     "test": "bun --filter effect-email test"
   },
   "devDependencies": {
     "oxfmt": "^0.48.0"
+  },
+  "dependencies": {
+    "effect-rules": "^0.2.1"
   }
 }

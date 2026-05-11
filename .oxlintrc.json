@@ -42,7 +42,13 @@
     "effect/prefer-yieldable-error-in-match": "error",
     "effect/no-as-effect-method-reference": "error",
     "effect/prefer-context-service": "error",
+    "effect/prefer-inline-context-service-shape": "error",
     "effect/no-inline-schema-compile": "error",
-    "effect/no-try-catch": "error"
+    "effect/no-try-catch": "error",
+    "effect/no-unnecessary-effect-tx": "error",
+    "effect/no-effect-run-in-tests": "error",
+    "effect/prefer-data-tagged-enum": "error",
+    "effect/no-effect-fn-immediate-invocation": "error",
+    "effect/prefer-match-value": "error"
   }
 }

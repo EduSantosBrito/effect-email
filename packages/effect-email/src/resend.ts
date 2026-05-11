@@ -15,8 +15,8 @@ import {
   RejectedMessageFailure,
   type ResendConfig,
   resendConfig,
-  type EmailShape,
   type SendFailure,
+  type SendPolicyServiceShape,
   type SendReceipt,
   SendPolicyService,
   TransportUnavailableFailure,
@@ -31,9 +31,69 @@ export { resendConfig as config };
 const ResendSuccess = Schema.Struct({ id: Schema.String });
 const decodeResendSuccess = Schema.decodeUnknownEffect(ResendSuccess);
 
-export class ResendAdapter extends Context.Service<ResendAdapter, EmailShape>()(
-  "effect-email/ResendAdapter",
-) {}
+export const ResendAdapterInput = Schema.Struct({
+  apiKey: Schema.Redacted(Schema.String),
+  client: Schema.declare<HttpClient.HttpClient>(
+    (input): input is HttpClient.HttpClient =>
+      typeof input === "object" && input !== null && Object.hasOwn(input, "execute"),
+  ),
+  policy: Schema.declare<SendPolicyServiceShape>(
+    (input): input is SendPolicyServiceShape =>
+      typeof input === "object" && input !== null && Object.hasOwn(input, "validate"),
+  ),
+});
+
+export class ResendAdapter extends Context.Service<
+  ResendAdapter,
+  {
+    readonly send: (message: EmailMessage) => Effect.Effect<SendReceipt, SendFailure>;
+  }
+>()("ResendAdapter") {
+  static readonly layer = (input: typeof ResendAdapterInput.Type) => {
+    const config = ResendAdapterInput.make(input);
+    return ResendAdapter.of({
+      ...config,
+      send: (message) =>
+        config.policy.validate(message).pipe(
+          Effect.flatMap((accepted) =>
+            HttpClientRequest.post("https://api.resend.com/emails").pipe(
+              HttpClientRequest.bearerToken(unsafeRedactedValueForAdapter(config.apiKey)),
+              HttpClientRequest.acceptJson,
+              HttpClientRequest.bodyJson(requestBody(accepted)),
+              Effect.flatMap(config.client.execute),
+              Effect.mapError(
+                () =>
+                  new TransportUnavailableFailure({
+                    provider: "resend",
+                    retryable: true,
+                  }),
+              ),
+            ),
+          ),
+          Effect.flatMap((response) =>
+            response.status >= 200 && response.status < 300
+              ? HttpClientResponse.schemaBodyJson(ResendSuccess)(response).pipe(
+                  Effect.flatMap(decodeResendSuccess),
+                  Effect.map(
+                    (body): SendReceipt => ({
+                      provider: "resend",
+                      messageId: body.id,
+                    }),
+                  ),
+                  Effect.mapError(
+                    () =>
+                      new ProviderProtocolFailure({
+                        provider: "resend",
+                        retryable: false,
+                      }),
+                  ),
+                )
+              : Effect.fail(classifyStatus(response.status)),
+          ),
+        ),
+    });
+  };
+}
 
 const encodeAttachment = (content: Uint8Array): string => Buffer.from(content).toString("base64");
 
@@ -80,57 +140,10 @@ const classifyStatus = (status: number): SendFailure => {
   return new ProviderProtocolFailure({ provider: "resend", retryable: false });
 };
 
-const makeAdapter: (
-  resend: ResendConfig,
-) => Effect.Effect<EmailShape["send"], never, HttpClient.HttpClient | SendPolicyService> =
-  Effect.fnUntraced(function* (resend) {
-    const client = yield* HttpClient.HttpClient;
-    const policy = yield* SendPolicyService;
-    const token = unsafeRedactedValueForAdapter(resend.apiKey);
-    return (message) =>
-      policy.validate(message).pipe(
-        Effect.flatMap((accepted) =>
-          HttpClientRequest.post("https://api.resend.com/emails").pipe(
-            HttpClientRequest.bearerToken(token),
-            HttpClientRequest.acceptJson,
-            HttpClientRequest.bodyJson(requestBody(accepted)),
-            Effect.flatMap(client.execute),
-            Effect.mapError(
-              () =>
-                new TransportUnavailableFailure({
-                  provider: "resend",
-                  retryable: true,
-                }),
-            ),
-          ),
-        ),
-        Effect.flatMap((response) =>
-          response.status >= 200 && response.status < 300
-            ? HttpClientResponse.schemaBodyJson(ResendSuccess)(response).pipe(
-                Effect.flatMap(decodeResendSuccess),
-                Effect.map(
-                  (body): SendReceipt => ({
-                    provider: "resend",
-                    messageId: body.id,
-                  }),
-                ),
-                Effect.mapError(
-                  () =>
-                    new ProviderProtocolFailure({
-                      provider: "resend",
-                      retryable: false,
-                    }),
-                ),
-              )
-            : Effect.fail(classifyStatus(response.status)),
-        ),
-      );
-  });
-
 const emailFromResendLayer = Layer.effect(Email)(
   Effect.gen(function* () {
     const adapter = yield* ResendAdapter;
-    return { send: adapter.send };
+    return Email.layer({ send: adapter.send });
   }),
 );
 
@@ -138,7 +151,11 @@ export const layer = (
   resend: ResendConfig,
 ): Layer.Layer<Email | ResendAdapter, never, HttpClient.HttpClient | SendPolicyService> => {
   const resendLayer = Layer.effect(ResendAdapter)(
-    makeAdapter(resend).pipe(Effect.map((send) => ({ send }))),
+    Effect.gen(function* () {
+      const client = yield* HttpClient.HttpClient;
+      const policy = yield* SendPolicyService;
+      return ResendAdapter.layer({ ...resend, client, policy });
+    }),
   );
 
   return emailFromResendLayer.pipe(Layer.provideMerge(resendLayer));
@@ -154,8 +171,13 @@ export const defaultLayer: Layer.Layer<Email | ResendAdapter, Config.ConfigError
     Layer.provideMerge(
       Layer.effect(ResendAdapter)(
         resendConfig.asEffect().pipe(
-          Effect.flatMap((resend) => makeAdapter(resend)),
-          Effect.map((send) => ({ send })),
+          Effect.flatMap((resend) =>
+            Effect.gen(function* () {
+              const client = yield* HttpClient.HttpClient;
+              const policy = yield* SendPolicyService;
+              return ResendAdapter.layer({ ...resend, client, policy });
+            }),
+          ),
         ),
       ).pipe(Layer.provideMerge(defaultPolicyLayer), Layer.provide(FetchHttpClient.layer)),
     ),
