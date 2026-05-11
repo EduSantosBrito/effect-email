@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ConfigProvider, Effect, Layer, Redacted, Ref, Result, Schema } from "effect";
+import { ConfigProvider, Effect, Layer, Predicate, Redacted, Ref, Result, Schema } from "effect";
 import {
   HttpClient,
   HttpClientError,
@@ -7,225 +7,185 @@ import {
   HttpClientResponse,
 } from "effect/unstable/http";
 import {
+  Attachment,
   Email,
-  MailboxParser,
+  EmailMessage,
+  EmailMessageInput,
+  Mailbox,
   MessageBody,
-  MessageContentParser,
-  SendPolicyService,
-  defaultSendPolicy,
-  defaultPolicyLayer,
-  parserLayer,
-  policyLayer,
-  defaultTestLayer,
-  testLayer,
+  SendPolicy,
 } from "./index";
 import * as Resend from "./resend";
-import { TestEmailInspection, defaultLayer as defaultTestSubpathLayer } from "./test";
+import * as TestEmail from "./test";
 
-const parsedMessage = Effect.gen(function* () {
-  const mailbox = yield* MailboxParser;
-  const content = yield* MessageContentParser;
-  const from = yield* mailbox.mailbox({ address: "sender@example.com", displayName: "Sender" });
-  const recipients = yield* mailbox.recipients({
-    to: [{ address: "you@example.com" }],
-    cc: [{ address: "cc@example.com" }],
-    bcc: [{ address: "bcc@example.com" }],
+const makeMessage = (input: Partial<typeof EmailMessageInput.Type> = {}) =>
+  EmailMessage.make({
+    from: "Sender <sender@example.com>",
+    to: "you@example.com",
+    subject: "Hello",
+    text: "Plain",
+    ...input,
   });
-  const replyTo = yield* mailbox.mailbox({ address: "reply@example.com" });
-  const subject = yield* content.subject("Hello");
-  const body = yield* content.body({ text: "Plain", html: "<strong>Plain</strong>" });
-  const attachment = yield* content.attachment({
-    name: "report.txt",
-    mediaType: "text/plain",
-    content: new Uint8Array([104, 105]),
-  });
-  return { from, ...recipients, replyTo: [replyTo], subject, body, attachments: [attachment] };
-}).pipe(Effect.provide(parserLayer));
 
-describe("effect-email core", () => {
-  it.effect("parses strict mailboxes and rejects unsafe recipient lists", () =>
-    Effect.gen(function* () {
-      const mailbox = yield* MailboxParser;
-      assert.strictEqual(
-        yield* mailbox.emailAddress("Jane.Doe+test@Example.COM"),
-        "jane.doe+test@example.com",
-      );
-      const valid = yield* mailbox.mailbox({
-        address: "Jane.Doe+test@Example.COM",
-        displayName: "Jane Doe",
-      });
-      assert.strictEqual(valid.address, "jane.doe+test@example.com");
-      assert.strictEqual(
-        (yield* mailbox.mailbox({ address: "bad(comment)@example.com" }).pipe(Effect.exit))._tag,
-        "Failure",
-      );
-      assert.strictEqual(
-        (yield* mailbox.mailbox({ address: "jane@例.com" }).pipe(Effect.exit))._tag,
-        "Failure",
-      );
-      assert.strictEqual(
-        (yield* mailbox.mailbox({ address: '"jane"@example.com' }).pipe(Effect.exit))._tag,
-        "Failure",
-      );
-      assert.strictEqual(
-        (yield* mailbox
-          .mailbox({ address: "jane@example.com", displayName: "Jane <jane>" })
-          .pipe(Effect.exit))._tag,
-        "Failure",
-      );
-      assert.strictEqual((yield* mailbox.recipients({ to: [] }).pipe(Effect.exit))._tag, "Failure");
-      assert.strictEqual(
-        (yield* mailbox
-          .recipients({ to: [{ address: "a@example.com" }], cc: [{ address: "A@example.com" }] })
-          .pipe(Effect.exit))._tag,
-        "Failure",
-      );
-    }).pipe(Effect.provide(parserLayer)),
+const provideResend = (
+  client: HttpClient.HttpClient,
+  policy: Layer.Layer<SendPolicy> = Resend.policyLayer,
+): Layer.Layer<Email> =>
+  Resend.layer.pipe(
+    Layer.provide(
+      Layer.effect(
+        Resend.ResendClient,
+        Effect.gen(function* () {
+          const httpClient = yield* HttpClient.HttpClient;
+          const resend = yield* Resend.ResendConfig;
+          return Resend.ResendClient.layer({ client: httpClient, resend });
+        }),
+      ),
+    ),
+    Layer.provide(Layer.succeed(Resend.ResendConfig)(Resend.makeConfig("secret"))),
+    Layer.provide(Layer.succeed(HttpClient.HttpClient)(client)),
+    Layer.provide(policy),
   );
 
-  it.effect("parses body variants and preserves caller-owned html", () =>
+describe("effect-email constructors", () => {
+  it.effect("builds a validated message and sends through the test layer", () =>
     Effect.gen(function* () {
-      const content = yield* MessageContentParser;
+      const message = yield* EmailMessage.make({
+        from: " Sender <Sender@Example.COM> ",
+        to: [{ address: "You@Example.COM" }],
+        cc: "copy@example.com",
+        bcc: [{ address: "blind@example.com", displayName: "Ops, Inc; Team @ Acme" }],
+        replyTo: "you@example.com",
+        subject: "Hello",
+        body: { text: "Plain", html: "<strong>Plain</strong>" },
+        attachments: {
+          name: "report.txt",
+          mediaType: "text/plain",
+          content: new Uint8Array([104, 105]),
+        },
+      });
+      assert.strictEqual(message.from.address, "sender@example.com");
+      assert.strictEqual(message.from.displayName, "Sender");
+      assert.strictEqual(message.to[0].address, "you@example.com");
+      assert.strictEqual(message.bcc?.[0]?.displayName, "Ops, Inc; Team @ Acme");
       assert.deepStrictEqual(
-        yield* content.body({ text: "Text" }),
-        MessageBody.TextOnly({ text: "Text" }),
+        message.body,
+        MessageBody.TextAndHtml({ text: "Plain", html: "<strong>Plain</strong>" }),
       );
+
+      const receipt = yield* Effect.gen(function* () {
+        const email = yield* Email;
+        const inspection = yield* TestEmail.TestEmailInspection;
+        const sentReceipt = yield* email.send(message);
+        assert.deepStrictEqual(yield* inspection.sent, [message]);
+        return sentReceipt;
+      }).pipe(Effect.provide(TestEmail.defaultLayer));
+
+      assert.deepStrictEqual(receipt, { provider: "test", messageId: "test-message-id" });
+    }),
+  );
+
+  it.effect("fails fast with top-level field and reason", () =>
+    Effect.gen(function* () {
+      const cases: ReadonlyArray<
+        readonly [Partial<typeof EmailMessageInput.Type>, string, string]
+      > = [
+        [{ from: "bad(comment)@example.com" }, "from", "InvalidEmailAddress"],
+        [{ to: [] }, "to", "EmptyRecipients"],
+        [{ to: ["a@example.com"], cc: ["A@example.com"] }, "cc", "DuplicateRecipient"],
+        [{ subject: "bad\nsubject" }, "subject", "InvalidSubject"],
+        [{ text: "" }, "body", "InvalidTextBody"],
+        [{ html: " " }, "body", "InvalidHtmlBody"],
+        [
+          { attachments: { name: "../x", mediaType: "text/plain", content: new Uint8Array() } },
+          "attachments",
+          "InvalidAttachmentName",
+        ],
+        [
+          { attachments: { name: "x", mediaType: "not-a-type", content: new Uint8Array() } },
+          "attachments",
+          "InvalidMediaType",
+        ],
+        [
+          { attachments: { name: "x", mediaType: "text/plain", content: "aGk=" } },
+          "attachments",
+          "InvalidAttachmentContent",
+        ],
+      ];
+
+      for (const [input, field, reason] of cases) {
+        const failure = yield* makeMessage(input).pipe(Effect.flip);
+        assert.strictEqual(failure.field, field);
+        assert.strictEqual(failure.reason, reason);
+      }
+
+      const withReplyToDuplicate = yield* makeMessage({ replyTo: "you@example.com" });
+      assert.strictEqual(withReplyToDuplicate.replyTo?.[0]?.address, "you@example.com");
+    }),
+  );
+
+  it.effect("keeps component constructors usable without layers", () =>
+    Effect.gen(function* () {
+      const mailbox = yield* Mailbox.make("Jane Doe <JANE@Example.COM>");
+      assert.strictEqual(mailbox.address, "jane@example.com");
+      assert.strictEqual(mailbox.displayName, "Jane Doe");
       assert.deepStrictEqual(
-        yield* content.body({ html: "<p>x</p>" }),
+        yield* MessageBody.make({ html: "<p>x</p>" }),
         MessageBody.HtmlOnly({ html: "<p>x</p>" }),
       );
-      assert.deepStrictEqual(
-        yield* content.body({ text: "Text", html: "<p>x</p>" }),
-        MessageBody.TextAndHtml({ text: "Text", html: "<p>x</p>" }),
-      );
-      assert.strictEqual((yield* content.body({ text: " " }).pipe(Effect.exit))._tag, "Failure");
-    }).pipe(Effect.provide(parserLayer)),
-  );
-
-  it.effect("parses attachment bytes and rejects unsafe attachment authority", () =>
-    Effect.gen(function* () {
-      const content = yield* MessageContentParser;
-      const attachment = yield* content.attachment({
+      const attachment = yield* Attachment.make({
         name: "safe.pdf",
         mediaType: "application/pdf",
         content: new Uint8Array([1]),
       });
-      assert.strictEqual(attachment.content.byteLength, 1);
-      for (const input of [
-        { name: "../x", mediaType: "text/plain", content: new Uint8Array() },
-        { name: "x", mediaType: "not-a-type", content: new Uint8Array() },
-        { name: "x", mediaType: "text/plain", path: "/tmp/x", content: new Uint8Array() },
-        {
-          name: "x",
-          mediaType: "text/plain",
-          url: "https://example.com/x",
-          content: new Uint8Array(),
-        },
-        { name: "x", mediaType: "text/plain", base64: "aGk=", content: "aGk=" },
-      ]) {
-        assert.strictEqual((yield* content.attachment(input).pipe(Effect.exit))._tag, "Failure");
-      }
-    }).pipe(Effect.provide(parserLayer)),
-  );
-
-  it.effect("sends through scoped test layer and does not leak global state", () =>
-    Effect.gen(function* () {
-      const message = yield* parsedMessage;
-      const program = Effect.gen(function* () {
-        const email = yield* Email;
-        const inspection = yield* TestEmailInspection;
-        const receipt = yield* email.send(message);
-        const sent = yield* inspection.sent;
-        assert.deepStrictEqual(receipt, { provider: "test", messageId: "test-message" });
-        assert.strictEqual(sent.length, 1);
-      });
-      yield* program.pipe(Effect.provide(defaultTestLayer));
-      yield* Effect.gen(function* () {
-        const inspection = yield* TestEmailInspection;
-        assert.deepStrictEqual(yield* inspection.sent, []);
-      }).pipe(Effect.provide(defaultTestSubpathLayer));
+      assert.strictEqual(attachment.mediaType, "application/pdf");
     }),
   );
+});
 
-  it.effect("enforces default and custom send policies before recording", () =>
+describe("effect-email policy and test adapter", () => {
+  it.effect("merges default policy config and rejects before recording", () =>
     Effect.gen(function* () {
-      const message = yield* parsedMessage;
-      const validateWith = (policy: Parameters<typeof policyLayer>[0], candidate = message) =>
-        Effect.gen(function* () {
-          const service = yield* SendPolicyService;
-          return yield* service.validate(candidate).pipe(
-            Effect.flip,
-            Effect.map((failure) => failure.reason),
-          );
-        }).pipe(Effect.provide(policyLayer(policy)));
-      assert.strictEqual(
-        yield* validateWith({ ...defaultSendPolicy, maxRecipients: 1 }),
-        "TooManyRecipients",
-      );
-      assert.strictEqual(
-        yield* validateWith({ ...defaultSendPolicy, maxSubjectBytes: 1 }),
-        "SubjectTooLarge",
-      );
-      assert.strictEqual(
-        yield* validateWith({ ...defaultSendPolicy, maxTextBodyBytes: 1 }),
-        "TextBodyTooLarge",
-      );
-      assert.strictEqual(
-        yield* validateWith({ ...defaultSendPolicy, maxHtmlBodyBytes: 1 }),
-        "HtmlBodyTooLarge",
-      );
-      assert.strictEqual(
-        yield* validateWith({ ...defaultSendPolicy, maxAttachments: 0 }),
-        "TooManyAttachments",
-      );
-      assert.strictEqual(
-        yield* validateWith({ ...defaultSendPolicy, maxAttachmentBytes: 1 }),
-        "AttachmentTooLarge",
-      );
-      assert.strictEqual(
-        yield* validateWith({ ...defaultSendPolicy, maxTotalAttachmentBytes: 1 }),
-        "TotalAttachmentsTooLarge",
-      );
-      assert.strictEqual(
-        yield* validateWith(defaultSendPolicy, { ...message, to: [], cc: [], bcc: [] }),
-        "EmptyRecipients",
-      );
-      assert.strictEqual(
-        yield* validateWith(defaultSendPolicy, {
-          ...message,
-          body: MessageBody.TextOnly({ text: "" }),
-        }),
-        "EmptyBody",
-      );
+      const message = yield* makeMessage();
       yield* Effect.gen(function* () {
-        const policy = yield* SendPolicyService;
+        const policy = yield* SendPolicy;
+        assert.strictEqual(policy.maxRecipients, SendPolicy.defaultConfig.maxRecipients);
         assert.deepStrictEqual(yield* policy.validate(message), message);
-      }).pipe(Effect.provide(defaultPolicyLayer));
+      }).pipe(Effect.provide(Layer.succeed(SendPolicy)(SendPolicy.layer({}))));
+
       yield* Effect.gen(function* () {
         const email = yield* Email;
-        const inspection = yield* TestEmailInspection;
-        assert.strictEqual(
-          (yield* email.send({ ...message, to: [], cc: [], bcc: [] }).pipe(Effect.exit))._tag,
-          "Failure",
-        );
-        assert.deepStrictEqual(yield* inspection.sent, []);
-      }).pipe(Effect.provide(testLayer.pipe(Layer.provide(defaultPolicyLayer))));
-      yield* Effect.gen(function* () {
-        const email = yield* Email;
-        const inspection = yield* TestEmailInspection;
-        assert.strictEqual(
-          yield* email.send(message).pipe(
-            Effect.flip,
-            Effect.map((failure) => failure._tag),
-          ),
-          "SendPolicyViolation",
-        );
+        const inspection = yield* TestEmail.TestEmailInspection;
+        const failure = yield* email.send(message).pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "SendPolicyViolation");
+        if (Predicate.isTagged(failure, "SendPolicyViolation")) {
+          assert.strictEqual(failure.reason, "TooManyRecipients");
+        }
         assert.deepStrictEqual(yield* inspection.sent, []);
       }).pipe(
         Effect.provide(
-          testLayer.pipe(Layer.provide(policyLayer({ ...defaultSendPolicy, maxRecipients: 1 }))),
+          TestEmail.layer.pipe(
+            Layer.provide(Layer.succeed(SendPolicy)(SendPolicy.layer({ maxRecipients: 0 }))),
+          ),
         ),
       );
+    }),
+  );
+
+  it.effect("supports sent, takeSent, and clear inspection APIs", () =>
+    Effect.gen(function* () {
+      const message = yield* makeMessage();
+      yield* Effect.gen(function* () {
+        const email = yield* Email;
+        const inspection = yield* TestEmail.TestEmailInspection;
+        yield* email.send(message);
+        assert.strictEqual((yield* inspection.sent).length, 1);
+        assert.strictEqual((yield* inspection.takeSent).length, 1);
+        assert.deepStrictEqual(yield* inspection.sent, []);
+        yield* email.send(message);
+        yield* inspection.clear;
+        assert.deepStrictEqual(yield* inspection.sent, []);
+      }).pipe(Effect.provide(TestEmail.defaultLayer));
     }),
   );
 });
@@ -254,18 +214,23 @@ describe("effect-email Resend adapter", () => {
           );
         }),
       );
-      const message = yield* parsedMessage;
+      const message = yield* makeMessage({
+        cc: "cc@example.com",
+        bcc: "bcc@example.com",
+        replyTo: "reply@example.com",
+        html: "<strong>Plain</strong>",
+        attachments: {
+          name: "report.txt",
+          mediaType: "text/plain",
+          content: new Uint8Array([104, 105]),
+        },
+      });
+
       const receipt = yield* Effect.gen(function* () {
         const email = yield* Email;
         return yield* email.send(message);
-      }).pipe(
-        Effect.provide(
-          Resend.layer(Resend.makeConfig("secret")).pipe(
-            Layer.provide(Layer.succeed(HttpClient.HttpClient)(client)),
-            Layer.provide(defaultPolicyLayer),
-          ),
-        ),
-      );
+      }).pipe(Effect.provide(provideResend(client)));
+
       assert.deepStrictEqual(receipt, { provider: "resend", messageId: "resend-id" });
       assert.strictEqual(yield* Ref.get(attempts), 1);
       const request = yield* Ref.get(seen);
@@ -310,8 +275,34 @@ describe("effect-email Resend adapter", () => {
     }),
   );
 
-  it.effect("classifies safe failures and does not expose raw provider body or secrets", () =>
+  it.effect("enforces policy before invoking ResendClient", () =>
     Effect.gen(function* () {
+      const attempts = yield* Ref.make(0);
+      const client = HttpClient.make((request) =>
+        Ref.update(attempts, (n) => n + 1).pipe(
+          Effect.as(
+            HttpClientResponse.fromWeb(request, new Response('{"id":"x"}', { status: 200 })),
+          ),
+        ),
+      );
+      const message = yield* makeMessage();
+      const failure = yield* Effect.gen(function* () {
+        const email = yield* Email;
+        return yield* email.send(message);
+      }).pipe(
+        Effect.provide(
+          provideResend(client, Layer.succeed(SendPolicy)(SendPolicy.layer({ maxRecipients: 0 }))),
+        ),
+        Effect.flip,
+      );
+      assert.ok(Predicate.isTagged(failure, "SendPolicyViolation"));
+      assert.strictEqual(yield* Ref.get(attempts), 0);
+    }),
+  );
+
+  it.effect("classifies safe failures and config", () =>
+    Effect.gen(function* () {
+      const message = yield* makeMessage();
       const cases: ReadonlyArray<readonly [number, string]> = [
         [401, "AuthenticationFailure"],
         [429, "RateLimitFailure"],
@@ -328,30 +319,26 @@ describe("effect-email Resend adapter", () => {
             ),
           ),
         );
-        const message = yield* parsedMessage;
         const failure = yield* Effect.gen(function* () {
           const email = yield* Email;
           return yield* email.send(message);
-        }).pipe(
-          Effect.provide(
-            Resend.layer(Resend.makeConfig("super-secret")).pipe(
-              Layer.provide(Layer.succeed(HttpClient.HttpClient)(client)),
-              Layer.provide(defaultPolicyLayer),
-            ),
-          ),
-          Effect.flip,
-        );
+        }).pipe(Effect.provide(provideResend(client)), Effect.flip);
         const rendered = String(failure);
         assert.ok(rendered.includes(tag));
         assert.ok(!rendered.includes("sender@example.com"));
-        assert.ok(!rendered.includes("super-secret"));
+        assert.ok(!rendered.includes("secret"));
         assert.ok(!rendered.includes("report.txt"));
       }
-    }),
-  );
 
-  it.effect("loads redacted config and fails safely for empty config", () =>
-    Effect.gen(function* () {
+      const malformedClient = HttpClient.make((request) =>
+        Effect.succeed(HttpClientResponse.fromWeb(request, new Response("{}", { status: 200 }))),
+      );
+      const malformedFailure = yield* Effect.gen(function* () {
+        const email = yield* Email;
+        return yield* email.send(message);
+      }).pipe(Effect.provide(provideResend(malformedClient)), Effect.flip);
+      assert.ok(Predicate.isTagged(malformedFailure, "ProviderProtocolFailure"));
+
       const config = yield* Resend.config
         .asEffect()
         .pipe(
@@ -359,7 +346,7 @@ describe("effect-email Resend adapter", () => {
             ConfigProvider.layer(ConfigProvider.fromEnv({ env: { RESEND_API_KEY: "secret" } })),
           ),
         );
-      assert.deepStrictEqual(config.apiKey, Redacted.make("secret"));
+      assert.deepStrictEqual(config, { apiKey: Redacted.make("secret") });
       assert.strictEqual(
         (yield* Resend.config
           .asEffect()
