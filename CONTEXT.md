@@ -9,7 +9,8 @@ A provider-neutral typed request to send one email with sender, recipients, repl
 
 **Mailbox**:
 A structured email identity made from an email address and an optional display name.
-_Avoid_: Raw mailbox string
+Raw mailbox strings are accepted only at constructor boundaries such as `Mailbox.make` and `EmailMessage.make`; stored domain state is always structured.
+_Avoid_: Raw mailbox string as stored domain state
 
 **Email Address**:
 A strict ASCII mailbox address used inside a **Mailbox**.
@@ -134,7 +135,7 @@ A deferred **Transport Adapter** for direct SMTP delivery, intentionally exclude
 > **Domain expert:** "No. Security-sensitive fields must already be parsed before an adapter receives the message."
 
 > **Dev:** "Can users pass `Jane <jane@example.com>` directly?"
-> **Domain expert:** "No. They pass a structured Mailbox so display names and addresses can be validated separately."
+> **Domain expert:** "Only to constructor-boundary helpers. Stored messages contain structured Mailboxes so display names and addresses are validated separately."
 
 > **Dev:** "Do we expose `createClient()` for users who do not use Effect?"
 > **Domain expert:** "No. The MVP is Effect-first and exposes services, helpers, and Layers only."

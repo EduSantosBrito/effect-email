@@ -16,52 +16,87 @@ bun run check
 bun run test
 ```
 
-## Usage
+## Minimal Resend Send
 
 ```ts
-import { ConfigProvider, Effect, Layer } from "effect";
-import { Email, MailboxParser, MessageContentParser, parserLayer } from "effect-email";
-import { defaultLayer as ResendLayer } from "effect-email/resend";
+import { Effect } from "effect";
+import { Email, EmailMessage } from "effect-email";
+import * as Resend from "effect-email/resend";
 
 const program = Effect.gen(function* () {
-  const mailbox = yield* MailboxParser;
-  const content = yield* MessageContentParser;
   const email = yield* Email;
+  const message = yield* EmailMessage.make({
+    from: "Acme <onboarding@example.com>",
+    to: "user@example.com",
+    subject: "Hello",
+    text: "World",
+  });
 
-  const from = yield* mailbox.mailbox({ address: "sender@example.com", displayName: "Sender" });
-  const recipients = yield* mailbox.recipients({ to: [{ address: "you@example.com" }] });
-  const subject = yield* content.subject("Hello");
-  const body = yield* content.body({ text: "World" });
+  return yield* email.send(message);
+});
 
-  return yield* email.send({ from, ...recipients, subject, body });
-}).pipe(
-  Effect.provide(parserLayer),
-  Effect.provide(
-    ResendLayer.pipe(
-      Layer.provide(
-        ConfigProvider.layer(ConfigProvider.fromEnv({ env: { RESEND_API_KEY: "re_..." } })),
-      ),
-    ),
-  ),
-);
+await Effect.runPromise(program.pipe(Effect.provide(Resend.defaultLayer)));
 ```
 
 `effect-email/resend` is trusted-runtime only. Do not import provider-backed adapters into browser code or other runtimes where provider secrets can be exposed.
+
+## Custom Policy
+
+```ts
+import { Effect, Layer } from "effect";
+import { Email, EmailMessage, SendPolicy } from "effect-email";
+import * as Resend from "effect-email/resend";
+import { FetchHttpClient } from "effect/unstable/http";
+
+const EmailLive = Resend.layer.pipe(
+  Layer.provide(Resend.clientLayer),
+  Layer.provide(
+    Layer.succeed(
+      SendPolicy,
+      SendPolicy.layer({
+        ...Resend.policyConfig,
+        maxRecipients: 10,
+      }),
+    ),
+  ),
+  Layer.provide(FetchHttpClient.layer),
+);
+
+const program = Effect.gen(function* () {
+  const email = yield* Email;
+  const message = yield* EmailMessage.make({
+    from: "Acme <onboarding@example.com>",
+    to: "user@example.com",
+    subject: "Hello",
+    text: "World",
+  });
+
+  return yield* email.send(message);
+});
+
+await Effect.runPromise(program.pipe(Effect.provide(EmailLive)));
+```
 
 ## Test Adapter
 
 ```ts
 import { Effect } from "effect";
-import { Email } from "effect-email";
-import { TestEmailInspection, defaultLayer as TestEmailLayer } from "effect-email/test";
+import { Email, EmailMessage } from "effect-email";
+import * as TestEmail from "effect-email/test";
 
 const assertEmail = Effect.gen(function* () {
   const email = yield* Email;
-  const inspection = yield* TestEmailInspection;
+  const message = yield* EmailMessage.make({
+    from: "Acme <onboarding@example.com>",
+    to: "user@example.com",
+    subject: "Hello",
+    text: "World",
+  });
 
   yield* email.send(message);
 
+  const inspection = yield* TestEmail.TestEmailInspection;
   const sent = yield* inspection.takeSent;
   return sent.length;
-}).pipe(Effect.provide(TestEmailLayer));
+}).pipe(Effect.provide(TestEmail.defaultLayer));
 ```
