@@ -10,4 +10,4 @@ cp .env.example .env
 bun run send
 ```
 
-Edit `src/send.ts` to change sender, recipient, subject, or body.
+Edit `src/send.ts` to change sender, recipient, subject, body, or provider-neutral headers.

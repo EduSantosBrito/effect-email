@@ -30,4 +30,7 @@ export const requestBody = (message: EmailMessage) => ({
         })),
       }
     : {}),
+  ...(message.headers !== undefined
+    ? { headers: Object.fromEntries(message.headers.map((header) => [header.name, header.value])) }
+    : {}),
 });

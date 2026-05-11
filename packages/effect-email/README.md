@@ -104,6 +104,36 @@ const program = Effect.gen(function* () {
 });
 ```
 
+## Send Headers
+
+Email Headers are provider-neutral custom fields on the message. Use a record for common cases:
+
+```ts
+const message = yield* EmailMessage.make({
+  from: "Acme <onboarding@example.com>",
+  to: "user@example.com",
+  subject: "Hello",
+  text: "Plain",
+  headers: { "X-Campaign-ID": "spring-2026" },
+});
+```
+
+Use an ordered list when order, casing, or spacing matters. Header names are trimmed and casing is preserved. Header values are preserved exactly, except blank, multiline, and control-character values are rejected.
+
+```ts
+const message = yield* EmailMessage.make({
+  from: "Acme <onboarding@example.com>",
+  to: "user@example.com",
+  subject: "Hello",
+  text: "Plain",
+  headers: [{ name: " X-Trace-ID ", value: "  keep spacing  " }],
+});
+```
+
+Email Headers are not raw MIME escape hatches. Structured fields such as `From`, `To`, `Reply-To`, and `Subject`; MIME, authentication, and delivery fields such as `Content-Type`, `Message-ID`, `DKIM-Signature`, and `Received`; duplicate names; and provider-reserved `Resend-*` / `X-Resend-*` names are rejected before send.
+
+Every adapter also enforces local header limits through `SendPolicy`: 20 headers, 128 bytes per header name, 998 bytes per header value, and 8000 total header bytes by default. The Resend adapter maps accepted headers to Resend's `headers` object and omits it when no headers are present.
+
 ## Test Adapter
 
 Use `effect-email/test` when application code should send email but tests need inspection instead of network I/O.

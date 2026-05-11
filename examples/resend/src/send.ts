@@ -12,6 +12,7 @@ const program = Effect.gen(function* () {
     to: `delivered@${domain}`,
     subject: "Hello from effect-email",
     text: "Sent with effect-email and Effect.",
+    headers: { "X-Campaign-ID": "example" },
   });
 
   const receipt = yield* email.send(message);
