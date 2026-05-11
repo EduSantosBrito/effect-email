@@ -1,3 +1,4 @@
+import { Option } from "effect";
 import { MessageBody, type EmailMessage, type Mailbox } from "../index";
 
 const encodeAttachment = (content: Uint8Array): string => Buffer.from(content).toString("base64");
@@ -30,7 +31,10 @@ export const requestBody = (message: EmailMessage) => ({
         })),
       }
     : {}),
-  ...(message.headers !== undefined
-    ? { headers: Object.fromEntries(message.headers.map((header) => [header.name, header.value])) }
-    : {}),
+  ...Option.match(Option.fromUndefinedOr(message.headers), {
+    onNone: () => ({}),
+    onSome: (headers) => ({
+      headers: Object.fromEntries(headers.map((header) => [header.name, header.value])),
+    }),
+  }),
 });
