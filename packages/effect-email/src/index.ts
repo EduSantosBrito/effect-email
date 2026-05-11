@@ -106,6 +106,41 @@ export interface EmailMessage {
   readonly headers?: readonly [EmailHeader, ...EmailHeader[]];
 }
 
+const MailboxSchema = Schema.declare<Mailbox>(
+  (input): input is Mailbox => typeof input === "object" && input !== null,
+);
+const MailboxListSchema = Schema.declare<readonly [Mailbox, ...Mailbox[]]>(
+  (input): input is readonly [Mailbox, ...Mailbox[]] => Array.isArray(input) && input.length > 0,
+);
+const AttachmentListSchema = Schema.declare<readonly [Attachment, ...Attachment[]]>(
+  (input): input is readonly [Attachment, ...Attachment[]] =>
+    Array.isArray(input) && input.length > 0,
+);
+const EmailHeaderListSchema = Schema.declare<readonly [EmailHeader, ...EmailHeader[]]>(
+  (input): input is readonly [EmailHeader, ...EmailHeader[]] =>
+    Array.isArray(input) && input.length > 0,
+);
+const MessageBodySchema = Schema.declare<MessageBody>(
+  (input): input is MessageBody =>
+    MessageBodyVariants.$is("TextOnly")(input) ||
+    MessageBodyVariants.$is("HtmlOnly")(input) ||
+    MessageBodyVariants.$is("TextAndHtml")(input),
+);
+const ParsedEmailMessage = Schema.Struct({
+  messageType: Schema.Literal("EmailMessage"),
+  from: MailboxSchema,
+  to: MailboxListSchema,
+  cc: Schema.OptionFromOptionalKey(MailboxListSchema),
+  bcc: Schema.OptionFromOptionalKey(MailboxListSchema),
+  replyTo: Schema.OptionFromOptionalKey(MailboxListSchema),
+  subject: Schema.String,
+  body: MessageBodySchema,
+  attachments: Schema.OptionFromOptionalKey(AttachmentListSchema),
+  headers: Schema.OptionFromOptionalKey(EmailHeaderListSchema),
+});
+type ParsedEmailMessage = typeof ParsedEmailMessage.Type;
+const encodeEmailMessage = Schema.encodeUnknownSync(ParsedEmailMessage);
+
 export interface SendReceipt {
   readonly provider: string;
   readonly messageId: string;
@@ -746,10 +781,9 @@ const parseMessageMailboxList: (
   input: unknown,
 ) => Effect.Effect<readonly [Mailbox, ...Mailbox[]] | undefined, EmailMessageValidationFailure> =
   Effect.fnUntraced(function* (field, input) {
-    return yield* Option.match(Option.fromUndefinedOr(optionalValue(input)), {
-      onNone: () => Effect.void.pipe(Effect.as(undefined)),
-      onSome: (value) => nonEmptyMailboxArray(value).pipe(mapMailboxFailure(field)),
-    });
+    const value = optionalValue(input);
+    if (value === undefined) return undefined;
+    return yield* nonEmptyMailboxArray(value).pipe(mapMailboxFailure(field));
   });
 
 const parseAttachments: (
@@ -758,10 +792,9 @@ const parseAttachments: (
   readonly [Attachment, ...Attachment[]] | undefined,
   EmailMessageValidationFailure
 > = Effect.fnUntraced(function* (input) {
-  return yield* Option.match(Option.fromUndefinedOr(optionalValue(input)), {
-    onNone: () => Effect.void.pipe(Effect.as(undefined)),
-    onSome: (value) => nonEmptyAttachmentArray(value).pipe(mapContentFailure("attachments")),
-  });
+  const value = optionalValue(input);
+  if (value === undefined) return undefined;
+  return yield* nonEmptyAttachmentArray(value).pipe(mapContentFailure("attachments"));
 });
 
 const parseEmailMessage: (
@@ -799,46 +832,29 @@ const parseEmailMessage: (
       },
       { concurrency: "unbounded" },
     );
-    const duplicateRecipient = firstDuplicateBy(
-      [
-        ...to.map(recipientEntry("to")),
-        ...Option.getOrElse(Option.fromUndefinedOr(cc), () => []).map(recipientEntry("cc")),
-        ...Option.getOrElse(Option.fromUndefinedOr(bcc), () => []).map(recipientEntry("bcc")),
-      ],
-      ({ mailbox }) => mailbox.address,
-    );
+    const recipientEntries = [
+      ...to.map(recipientEntry("to")),
+      ...Option.getOrElse(Option.fromUndefinedOr(cc), () => []).map(recipientEntry("cc")),
+      ...Option.getOrElse(Option.fromUndefinedOr(bcc), () => []).map(recipientEntry("bcc")),
+    ];
+    const duplicateRecipient = firstDuplicateBy(recipientEntries, ({ mailbox }) => mailbox.address);
     if (Option.isSome(duplicateRecipient)) {
       return yield* new EmailMessageValidationFailure({
         field: duplicateRecipient.value.field,
         reason: "DuplicateRecipient",
       });
     }
-    const message: Omit<EmailMessage, "headers"> = {
+    return encodeEmailMessage({
       messageType: "EmailMessage",
       from,
       to,
-      ...Option.match(Option.fromUndefinedOr(cc), {
-        onNone: () => ({}),
-        onSome: (value) => ({ cc: value }),
-      }),
-      ...Option.match(Option.fromUndefinedOr(bcc), {
-        onNone: () => ({}),
-        onSome: (value) => ({ bcc: value }),
-      }),
-      ...Option.match(Option.fromUndefinedOr(replyTo), {
-        onNone: () => ({}),
-        onSome: (value) => ({ replyTo: value }),
-      }),
+      cc: Option.fromUndefinedOr(cc),
+      bcc: Option.fromUndefinedOr(bcc),
+      replyTo: Option.fromUndefinedOr(replyTo),
       subject,
       body,
-      ...Option.match(Option.fromUndefinedOr(attachments), {
-        onNone: () => ({}),
-        onSome: (value) => ({ attachments: value }),
-      }),
-    };
-    return Option.match(Option.fromUndefinedOr(headers), {
-      onNone: () => message,
-      onSome: (value) => ({ ...message, headers: value }),
+      attachments: Option.fromUndefinedOr(attachments),
+      headers: Option.fromUndefinedOr(headers),
     });
   },
 );
