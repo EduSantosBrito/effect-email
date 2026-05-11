@@ -24,10 +24,12 @@ export interface Attachment {
   readonly content: Uint8Array;
 }
 
-export type MessageBody =
-  | { readonly _tag: "TextOnly"; readonly text: string }
-  | { readonly _tag: "HtmlOnly"; readonly html: string }
-  | { readonly _tag: "TextAndHtml"; readonly text: string; readonly html: string };
+export type MessageBody = Data.TaggedEnum<{
+  TextOnly: { readonly text: string };
+  HtmlOnly: { readonly html: string };
+  TextAndHtml: { readonly text: string; readonly html: string };
+}>;
+export const MessageBody = Data.taggedEnum<MessageBody>();
 
 export interface EmailMessage {
   readonly from: Mailbox;
@@ -45,64 +47,74 @@ export interface SendReceipt {
   readonly messageId: string;
 }
 
-export class MailboxValidationFailure extends Data.TaggedError("MailboxValidationFailure")<{
-  readonly reason:
-    | "InvalidEmailAddress"
-    | "InvalidDisplayName"
-    | "EmptyRecipients"
-    | "DuplicateRecipient";
-}> {}
+export class MailboxValidationFailure extends Schema.TaggedErrorClass<MailboxValidationFailure>()(
+  "MailboxValidationFailure",
+  {
+    reason: Schema.Literals([
+      "InvalidEmailAddress",
+      "InvalidDisplayName",
+      "EmptyRecipients",
+      "DuplicateRecipient",
+    ]),
+  },
+) {}
 
-export class MessageContentValidationFailure extends Data.TaggedError(
+export class MessageContentValidationFailure extends Schema.TaggedErrorClass<MessageContentValidationFailure>()(
   "MessageContentValidationFailure",
-)<{
-  readonly reason:
-    | "InvalidSubject"
-    | "EmptyBody"
-    | "InvalidAttachmentName"
-    | "InvalidMediaType"
-    | "InvalidAttachmentContent";
-}> {}
+  {
+    reason: Schema.Literals([
+      "InvalidSubject",
+      "EmptyBody",
+      "InvalidAttachmentName",
+      "InvalidMediaType",
+      "InvalidAttachmentContent",
+    ]),
+  },
+) {}
 
-export class SendPolicyViolation extends Data.TaggedError("SendPolicyViolation")<{
-  readonly reason:
-    | "TooManyRecipients"
-    | "EmptyRecipients"
-    | "EmptyBody"
-    | "SubjectTooLarge"
-    | "TextBodyTooLarge"
-    | "HtmlBodyTooLarge"
-    | "TooManyAttachments"
-    | "AttachmentTooLarge"
-    | "TotalAttachmentsTooLarge";
-  readonly limit: number;
-  readonly retryable: false;
-}> {}
+export class SendPolicyViolation extends Schema.TaggedErrorClass<SendPolicyViolation>()(
+  "SendPolicyViolation",
+  {
+    reason: Schema.Literals([
+      "TooManyRecipients",
+      "EmptyRecipients",
+      "EmptyBody",
+      "SubjectTooLarge",
+      "TextBodyTooLarge",
+      "HtmlBodyTooLarge",
+      "TooManyAttachments",
+      "AttachmentTooLarge",
+      "TotalAttachmentsTooLarge",
+    ]),
+    limit: Schema.Number,
+    retryable: Schema.Literal(false),
+  },
+) {}
 
-export class AuthenticationFailure extends Data.TaggedError("AuthenticationFailure")<{
-  readonly provider: "resend";
-  readonly retryable: false;
-}> {}
+export class AuthenticationFailure extends Schema.TaggedErrorClass<AuthenticationFailure>()(
+  "AuthenticationFailure",
+  { provider: Schema.Literal("resend"), retryable: Schema.Literal(false) },
+) {}
 
-export class RateLimitFailure extends Data.TaggedError("RateLimitFailure")<{
-  readonly provider: "resend";
-  readonly retryable: true;
-}> {}
+export class RateLimitFailure extends Schema.TaggedErrorClass<RateLimitFailure>()(
+  "RateLimitFailure",
+  { provider: Schema.Literal("resend"), retryable: Schema.Literal(true) },
+) {}
 
-export class RejectedMessageFailure extends Data.TaggedError("RejectedMessageFailure")<{
-  readonly provider: "resend";
-  readonly retryable: false;
-}> {}
+export class RejectedMessageFailure extends Schema.TaggedErrorClass<RejectedMessageFailure>()(
+  "RejectedMessageFailure",
+  { provider: Schema.Literal("resend"), retryable: Schema.Literal(false) },
+) {}
 
-export class TransportUnavailableFailure extends Data.TaggedError("TransportUnavailableFailure")<{
-  readonly provider: "resend";
-  readonly retryable: true;
-}> {}
+export class TransportUnavailableFailure extends Schema.TaggedErrorClass<TransportUnavailableFailure>()(
+  "TransportUnavailableFailure",
+  { provider: Schema.Literal("resend"), retryable: Schema.Literal(true) },
+) {}
 
-export class ProviderProtocolFailure extends Data.TaggedError("ProviderProtocolFailure")<{
-  readonly provider: "resend";
-  readonly retryable: false;
-}> {}
+export class ProviderProtocolFailure extends Schema.TaggedErrorClass<ProviderProtocolFailure>()(
+  "ProviderProtocolFailure",
+  { provider: Schema.Literal("resend"), retryable: Schema.Literal(false) },
+) {}
 
 export type SendFailure =
   | SendPolicyViolation
@@ -147,12 +159,58 @@ const hasControlCharacter = (value: string): boolean => {
   }
   return false;
 };
-const getProperty = (input: object, key: string): unknown => Reflect.get(input, key);
+
+const RawMailbox = Schema.Struct({
+  address: Schema.Unknown,
+  displayName: Schema.optional(Schema.Unknown),
+});
+const RawRecipients = Schema.Struct({
+  to: Schema.optional(Schema.Array(Schema.Unknown)),
+  cc: Schema.optional(Schema.Array(Schema.Unknown)),
+  bcc: Schema.optional(Schema.Array(Schema.Unknown)),
+});
+const RawBody = Schema.Struct({
+  text: Schema.optional(Schema.Unknown),
+  html: Schema.optional(Schema.Unknown),
+});
+const RawAttachment = Schema.Struct({
+  name: Schema.Unknown,
+  mediaType: Schema.Unknown,
+  content: Schema.Unknown,
+  path: Schema.optional(Schema.Unknown),
+  url: Schema.optional(Schema.Unknown),
+  base64: Schema.optional(Schema.Unknown),
+});
+const decodeEmailAddress = Schema.decodeUnknownEffect(EmailAddress);
+const decodeDisplayName = Schema.decodeUnknownEffect(DisplayName);
+const decodeMediaType = Schema.decodeUnknownEffect(MediaType);
+const decodeRawMailbox = Schema.decodeUnknownEffect(RawMailbox);
+const decodeRawRecipients = Schema.decodeUnknownEffect(RawRecipients);
+const decodeRawBody = Schema.decodeUnknownEffect(RawBody);
+const decodeRawAttachment = Schema.decodeUnknownEffect(RawAttachment);
 
 const formatAddress = (mailbox: Mailbox): string =>
   mailbox.displayName === undefined
     ? mailbox.address
     : `${mailbox.displayName} <${mailbox.address}>`;
+
+const bodyHasContent = MessageBody.$match({
+  TextOnly: ({ text }) => hasText(text),
+  HtmlOnly: ({ html }) => hasText(html),
+  TextAndHtml: ({ text, html }) => hasText(text) || hasText(html),
+});
+
+const textBodyBytes = MessageBody.$match({
+  TextOnly: ({ text }) => utf8Bytes(text),
+  HtmlOnly: () => 0,
+  TextAndHtml: ({ text }) => utf8Bytes(text),
+});
+
+const htmlBodyBytes = MessageBody.$match({
+  TextOnly: () => 0,
+  HtmlOnly: ({ html }) => utf8Bytes(html),
+  TextAndHtml: ({ html }) => utf8Bytes(html),
+});
 
 export interface MailboxParserShape {
   readonly emailAddress: (input: unknown) => Effect.Effect<EmailAddress, MailboxValidationFailure>;
@@ -166,8 +224,8 @@ export class MailboxParser extends Context.Service<MailboxParser, MailboxParserS
   "effect-email/MailboxParser",
 ) {}
 
-const parseEmailAddress = (input: unknown): Effect.Effect<EmailAddress, MailboxValidationFailure> =>
-  Effect.suspend(() => {
+const parseEmailAddress: (input: unknown) => Effect.Effect<EmailAddress, MailboxValidationFailure> =
+  Effect.fnUntraced(function* (input) {
     if (
       typeof input !== "string" ||
       input.length > 254 ||
@@ -177,9 +235,9 @@ const parseEmailAddress = (input: unknown): Effect.Effect<EmailAddress, MailboxV
       input.includes(")") ||
       !addressPattern.test(input)
     ) {
-      return Effect.fail(new MailboxValidationFailure({ reason: "InvalidEmailAddress" }));
+      return yield* new MailboxValidationFailure({ reason: "InvalidEmailAddress" });
     }
-    return Schema.decodeUnknownEffect(EmailAddress)(normalizeAddress(input)).pipe(
+    return yield* decodeEmailAddress(normalizeAddress(input)).pipe(
       Effect.mapError(() => new MailboxValidationFailure({ reason: "InvalidEmailAddress" })),
     );
   });
@@ -197,39 +255,41 @@ const mailboxParser: MailboxParserShape = {
       ) {
         return Effect.fail(new MailboxValidationFailure({ reason: "InvalidDisplayName" }));
       }
-      return Schema.decodeUnknownEffect(DisplayName)(input).pipe(
+      return decodeDisplayName(input).pipe(
         Effect.mapError(() => new MailboxValidationFailure({ reason: "InvalidDisplayName" })),
       );
     }),
   mailbox: (input) =>
     Effect.gen(function* () {
-      if (typeof input !== "object" || input === null || Array.isArray(input)) {
-        return yield* new MailboxValidationFailure({ reason: "InvalidEmailAddress" });
-      }
-      const addressInput = getProperty(input, "address");
-      const displayNameInput = getProperty(input, "displayName");
-      const address = yield* mailboxParser.emailAddress(addressInput);
-      if (displayNameInput === undefined) {
+      const raw = yield* decodeRawMailbox(input).pipe(
+        Effect.mapError(() => new MailboxValidationFailure({ reason: "InvalidEmailAddress" })),
+      );
+      const address = yield* mailboxParser.emailAddress(raw.address);
+      if (raw.displayName === undefined) {
         return { address };
       }
-      const displayName = yield* mailboxParser.displayName(displayNameInput);
+      const displayName = yield* mailboxParser.displayName(raw.displayName);
       return { address, displayName };
     }),
   recipients: (input) =>
     Effect.gen(function* () {
-      if (typeof input !== "object" || input === null || Array.isArray(input)) {
-        return yield* new MailboxValidationFailure({ reason: "EmptyRecipients" });
-      }
+      const raw = yield* decodeRawRecipients(input).pipe(
+        Effect.mapError(() => new MailboxValidationFailure({ reason: "EmptyRecipients" })),
+      );
       const empty: readonly Mailbox[] = [];
-      const decodeList = (value: unknown) =>
-        value === undefined
-          ? Effect.succeed(empty)
-          : Array.isArray(value)
-            ? Effect.all(value.map((entry) => mailboxParser.mailbox(entry)))
-            : Effect.fail(new MailboxValidationFailure({ reason: "EmptyRecipients" }));
-      const to = yield* decodeList(getProperty(input, "to"));
-      const cc = yield* decodeList(getProperty(input, "cc"));
-      const bcc = yield* decodeList(getProperty(input, "bcc"));
+      const decodeList: (
+        value: unknown,
+      ) => Effect.Effect<readonly Mailbox[], MailboxValidationFailure> = Effect.fnUntraced(
+        function* (value) {
+          if (value === undefined) return empty;
+          if (Array.isArray(value))
+            return yield* Effect.all(value.map((entry) => mailboxParser.mailbox(entry)));
+          return yield* new MailboxValidationFailure({ reason: "EmptyRecipients" });
+        },
+      );
+      const to = yield* decodeList(raw.to);
+      const cc = yield* decodeList(raw.cc);
+      const bcc = yield* decodeList(raw.bcc);
       const all = [...to, ...cc, ...bcc];
       if (all.length === 0) {
         return yield* new MailboxValidationFailure({ reason: "EmptyRecipients" });
@@ -260,67 +320,65 @@ export class MessageContentParser extends Context.Service<
 
 const messageContentParser: MessageContentParserShape = {
   subject: (input) =>
-    typeof input === "string" &&
-    hasText(input) &&
-    !input.includes("\r") &&
-    !input.includes("\n") &&
-    !hasControlCharacter(input)
-      ? Effect.succeed(input)
-      : Effect.fail(new MessageContentValidationFailure({ reason: "InvalidSubject" })),
+    Effect.gen(function* () {
+      if (
+        typeof input === "string" &&
+        hasText(input) &&
+        !input.includes("\r") &&
+        !input.includes("\n") &&
+        !hasControlCharacter(input)
+      ) {
+        return input;
+      }
+      return yield* new MessageContentValidationFailure({ reason: "InvalidSubject" });
+    }),
   body: (input) =>
     Effect.gen(function* () {
-      if (typeof input !== "object" || input === null || Array.isArray(input)) {
-        return yield* new MessageContentValidationFailure({ reason: "EmptyBody" });
-      }
-      const textInput = getProperty(input, "text");
-      const htmlInput = getProperty(input, "html");
-      const text = typeof textInput === "string" && hasText(textInput) ? textInput : undefined;
-      const html = typeof htmlInput === "string" && hasText(htmlInput) ? htmlInput : undefined;
-      if (text !== undefined && html !== undefined) return { _tag: "TextAndHtml", text, html };
-      if (text !== undefined) return { _tag: "TextOnly", text };
-      if (html !== undefined) return { _tag: "HtmlOnly", html };
+      const raw = yield* decodeRawBody(input).pipe(
+        Effect.mapError(() => new MessageContentValidationFailure({ reason: "EmptyBody" })),
+      );
+      const text = typeof raw.text === "string" && hasText(raw.text) ? raw.text : undefined;
+      const html = typeof raw.html === "string" && hasText(raw.html) ? raw.html : undefined;
+      if (text !== undefined && html !== undefined) return MessageBody.TextAndHtml({ text, html });
+      if (text !== undefined) return MessageBody.TextOnly({ text });
+      if (html !== undefined) return MessageBody.HtmlOnly({ html });
       return yield* new MessageContentValidationFailure({ reason: "EmptyBody" });
     }),
   attachment: (input) =>
     Effect.gen(function* () {
-      if (typeof input !== "object" || input === null || Array.isArray(input)) {
-        return yield* new MessageContentValidationFailure({ reason: "InvalidAttachmentContent" });
-      }
-      const name = getProperty(input, "name");
-      const mediaType = getProperty(input, "mediaType");
-      const content = getProperty(input, "content");
-      if (
-        getProperty(input, "path") !== undefined ||
-        getProperty(input, "url") !== undefined ||
-        getProperty(input, "base64") !== undefined
-      ) {
+      const raw = yield* decodeRawAttachment(input).pipe(
+        Effect.mapError(
+          () => new MessageContentValidationFailure({ reason: "InvalidAttachmentContent" }),
+        ),
+      );
+      if (raw.path !== undefined || raw.url !== undefined || raw.base64 !== undefined) {
         return yield* new MessageContentValidationFailure({ reason: "InvalidAttachmentContent" });
       }
       if (
-        typeof name !== "string" ||
-        !hasText(name) ||
-        name.includes("/") ||
-        name.includes("\\") ||
-        name.includes("..") ||
-        hasControlCharacter(name) ||
-        /[<>:"|?*]/u.test(name)
+        typeof raw.name !== "string" ||
+        !hasText(raw.name) ||
+        raw.name.includes("/") ||
+        raw.name.includes("\\") ||
+        raw.name.includes("..") ||
+        hasControlCharacter(raw.name) ||
+        /[<>:"|?*]/u.test(raw.name)
       ) {
         return yield* new MessageContentValidationFailure({ reason: "InvalidAttachmentName" });
       }
-      if (typeof mediaType !== "string" || !mediaTypePattern.test(mediaType)) {
+      if (typeof raw.mediaType !== "string" || !mediaTypePattern.test(raw.mediaType)) {
         return yield* new MessageContentValidationFailure({ reason: "InvalidMediaType" });
       }
-      if (!(content instanceof Uint8Array)) {
+      if (!(raw.content instanceof Uint8Array)) {
         return yield* new MessageContentValidationFailure({ reason: "InvalidAttachmentContent" });
       }
       return {
-        name,
-        mediaType: yield* Schema.decodeUnknownEffect(MediaType)(mediaType.toLowerCase()).pipe(
+        name: raw.name,
+        mediaType: yield* decodeMediaType(raw.mediaType.toLowerCase()).pipe(
           Effect.mapError(
             () => new MessageContentValidationFailure({ reason: "InvalidMediaType" }),
           ),
         ),
-        content,
+        content: raw.content,
       };
     }),
 };
@@ -352,13 +410,7 @@ const makeSendPolicyService = (policy: SendPolicy): SendPolicyServiceShape => ({
           retryable: false,
         });
       }
-      if (
-        (message.body._tag === "TextOnly" && !hasText(message.body.text)) ||
-        (message.body._tag === "HtmlOnly" && !hasText(message.body.html)) ||
-        (message.body._tag === "TextAndHtml" &&
-          !hasText(message.body.text) &&
-          !hasText(message.body.html))
-      ) {
+      if (!bodyHasContent(message.body)) {
         return yield* new SendPolicyViolation({ reason: "EmptyBody", limit: 1, retryable: false });
       }
       if (utf8Bytes(message.subject) > policy.maxSubjectBytes) {
@@ -368,20 +420,14 @@ const makeSendPolicyService = (policy: SendPolicy): SendPolicyServiceShape => ({
           retryable: false,
         });
       }
-      if (
-        (message.body._tag === "TextOnly" || message.body._tag === "TextAndHtml") &&
-        utf8Bytes(message.body.text) > policy.maxTextBodyBytes
-      ) {
+      if (textBodyBytes(message.body) > policy.maxTextBodyBytes) {
         return yield* new SendPolicyViolation({
           reason: "TextBodyTooLarge",
           limit: policy.maxTextBodyBytes,
           retryable: false,
         });
       }
-      if (
-        (message.body._tag === "HtmlOnly" || message.body._tag === "TextAndHtml") &&
-        utf8Bytes(message.body.html) > policy.maxHtmlBodyBytes
-      ) {
+      if (htmlBodyBytes(message.body) > policy.maxHtmlBodyBytes) {
         return yield* new SendPolicyViolation({
           reason: "HtmlBodyTooLarge",
           limit: policy.maxHtmlBodyBytes,

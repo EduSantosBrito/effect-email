@@ -1,9 +1,15 @@
 import { assert, describe, it } from "@effect/vitest";
 import { ConfigProvider, Effect, Layer, Redacted, Ref, Result, Schema } from "effect";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
+import {
+  HttpClient,
+  HttpClientError,
+  HttpClientRequest,
+  HttpClientResponse,
+} from "effect/unstable/http";
 import {
   Email,
   MailboxParser,
+  MessageBody,
   MessageContentParser,
   SendPolicyService,
   defaultSendPolicy,
@@ -80,19 +86,18 @@ describe("effect-email core", () => {
   it.effect("parses body variants and preserves caller-owned html", () =>
     Effect.gen(function* () {
       const content = yield* MessageContentParser;
-      assert.deepStrictEqual(yield* content.body({ text: "Text" }), {
-        _tag: "TextOnly",
-        text: "Text",
-      });
-      assert.deepStrictEqual(yield* content.body({ html: "<p>x</p>" }), {
-        _tag: "HtmlOnly",
-        html: "<p>x</p>",
-      });
-      assert.deepStrictEqual(yield* content.body({ text: "Text", html: "<p>x</p>" }), {
-        _tag: "TextAndHtml",
-        text: "Text",
-        html: "<p>x</p>",
-      });
+      assert.deepStrictEqual(
+        yield* content.body({ text: "Text" }),
+        MessageBody.TextOnly({ text: "Text" }),
+      );
+      assert.deepStrictEqual(
+        yield* content.body({ html: "<p>x</p>" }),
+        MessageBody.HtmlOnly({ html: "<p>x</p>" }),
+      );
+      assert.deepStrictEqual(
+        yield* content.body({ text: "Text", html: "<p>x</p>" }),
+        MessageBody.TextAndHtml({ text: "Text", html: "<p>x</p>" }),
+      );
       assert.strictEqual((yield* content.body({ text: " " }).pipe(Effect.exit))._tag, "Failure");
     }).pipe(Effect.provide(parserLayer)),
   );
@@ -188,7 +193,7 @@ describe("effect-email core", () => {
       assert.strictEqual(
         yield* validateWith(defaultSendPolicy, {
           ...message,
-          body: { _tag: "TextOnly", text: "" },
+          body: MessageBody.TextOnly({ text: "" }),
         }),
         "EmptyBody",
       );
@@ -233,12 +238,14 @@ describe("effect-email Resend adapter", () => {
       const client = HttpClient.make((request) =>
         Effect.gen(function* () {
           yield* Ref.update(attempts, (n) => n + 1);
-          const web = yield* Effect.sync(() => {
-            const result = HttpClientRequest.toWebResult(request);
-            if (Result.isFailure(result)) {
-              throw result.failure;
-            }
-            return result.success;
+          const web = yield* Result.match(HttpClientRequest.toWebResult(request), {
+            onFailure: (cause) =>
+              Effect.fail(
+                new HttpClientError.HttpClientError({
+                  reason: new HttpClientError.EncodeError({ request, cause }),
+                }),
+              ),
+            onSuccess: Effect.succeed,
           });
           yield* Ref.set(seen, web);
           return HttpClientResponse.fromWeb(
@@ -322,7 +329,7 @@ describe("effect-email Resend adapter", () => {
           ),
         );
         const message = yield* parsedMessage;
-        const exit = yield* Effect.gen(function* () {
+        const failure = yield* Effect.gen(function* () {
           const email = yield* Email;
           return yield* email.send(message);
         }).pipe(
@@ -332,16 +339,13 @@ describe("effect-email Resend adapter", () => {
               Layer.provide(defaultPolicyLayer),
             ),
           ),
-          Effect.exit,
+          Effect.flip,
         );
-        assert.strictEqual(exit._tag, "Failure");
-        if (exit._tag === "Failure") {
-          const rendered = String(exit.cause);
-          assert.ok(rendered.includes(tag));
-          assert.ok(!rendered.includes("sender@example.com"));
-          assert.ok(!rendered.includes("super-secret"));
-          assert.ok(!rendered.includes("report.txt"));
-        }
+        const rendered = String(failure);
+        assert.ok(rendered.includes(tag));
+        assert.ok(!rendered.includes("sender@example.com"));
+        assert.ok(!rendered.includes("super-secret"));
+        assert.ok(!rendered.includes("report.txt"));
       }
     }),
   );

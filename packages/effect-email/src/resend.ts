@@ -9,6 +9,7 @@ import {
   AuthenticationFailure,
   Email,
   type EmailMessage,
+  MessageBody,
   ProviderProtocolFailure,
   RateLimitFailure,
   RejectedMessageFailure,
@@ -36,6 +37,12 @@ export class ResendAdapter extends Context.Service<ResendAdapter, EmailShape>()(
 
 const encodeAttachment = (content: Uint8Array): string => Buffer.from(content).toString("base64");
 
+const encodeBody = MessageBody.$match({
+  TextOnly: ({ text }) => ({ text }),
+  HtmlOnly: ({ html }) => ({ html }),
+  TextAndHtml: ({ text, html }) => ({ text, html }),
+});
+
 const requestBody = (message: EmailMessage) => ({
   from: unsafeFormatMailboxForAdapter(message.from),
   to: message.to.map(unsafeFormatMailboxForAdapter),
@@ -45,12 +52,7 @@ const requestBody = (message: EmailMessage) => ({
     ? { reply_to: message.replyTo.map(unsafeFormatMailboxForAdapter) }
     : {}),
   subject: message.subject,
-  ...(message.body._tag === "TextOnly" || message.body._tag === "TextAndHtml"
-    ? { text: message.body.text }
-    : {}),
-  ...(message.body._tag === "HtmlOnly" || message.body._tag === "TextAndHtml"
-    ? { html: message.body.html }
-    : {}),
+  ...encodeBody(message.body),
   ...(message.attachments !== undefined
     ? {
         attachments: message.attachments.map((attachment) => ({
@@ -78,10 +80,10 @@ const classifyStatus = (status: number): SendFailure => {
   return new ProviderProtocolFailure({ provider: "resend", retryable: false });
 };
 
-const makeAdapter = (
+const makeAdapter: (
   resend: ResendConfig,
-): Effect.Effect<EmailShape["send"], never, HttpClient.HttpClient | SendPolicyService> =>
-  Effect.gen(function* () {
+) => Effect.Effect<EmailShape["send"], never, HttpClient.HttpClient | SendPolicyService> =
+  Effect.fnUntraced(function* (resend) {
     const client = yield* HttpClient.HttpClient;
     const policy = yield* SendPolicyService;
     const token = unsafeRedactedValueForAdapter(resend.apiKey);
