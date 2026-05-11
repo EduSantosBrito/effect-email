@@ -1,28 +1,31 @@
 import {
   Attachment,
-  AttachmentInput,
   AuthenticationFailure,
-  DisplayName,
   Email,
-  EmailAddress,
   EmailMessage,
-  EmailMessageInput,
   EmailMessageValidationFailure,
   Mailbox,
-  MailboxInput,
   MailboxValidationFailure,
-  MediaType,
   MessageBody,
-  MessageBodyInput,
   MessageContentValidationFailure,
   ProviderProtocolFailure,
   RateLimitFailure,
   RejectedMessageFailure,
   SendPolicy,
-  SendPolicyConfigInput,
   SendPolicyViolation,
   TransportUnavailableFailure,
+  type Attachment as AttachmentShape,
+  type AttachmentInput,
+  type DisplayName,
+  type EmailAddress,
+  type EmailMessage as EmailMessageShape,
+  type EmailMessageInput,
   type EmailSend,
+  type Mailbox as MailboxShape,
+  type MailboxInput,
+  type MediaType,
+  type MessageBody as MessageBodyShape,
+  type MessageBodyInput,
   type SendFailure,
   type SendPolicyConfig,
   type SendReceipt,
@@ -30,77 +33,63 @@ import {
 import {
   ResendClient,
   ResendConfig,
-  ResendConfigInput,
   clientLayer,
-  config,
   defaultLayer,
   layer,
   makeConfig,
   policyConfig,
-  policyLayer,
+  type ResendConfigInput,
   type ResendConfigShape,
 } from "effect-email/resend";
 import {
-  TestEmailAdapter,
   TestEmailInspection,
   defaultLayer as testDefaultLayer,
   layer as testLayer,
-  policyConfig as testPolicyConfig,
-  policyLayer as testPolicyLayer,
 } from "effect-email/test";
 
-export const rootApi = [
-  Attachment,
-  AttachmentInput,
-  AuthenticationFailure,
-  DisplayName,
-  Email,
-  EmailAddress,
-  EmailMessage,
-  EmailMessageInput,
-  EmailMessageValidationFailure,
-  Mailbox,
-  MailboxInput,
-  MailboxValidationFailure,
-  MediaType,
-  MessageBody,
-  MessageBodyInput,
-  MessageContentValidationFailure,
-  ProviderProtocolFailure,
-  RateLimitFailure,
-  RejectedMessageFailure,
-  SendPolicy,
-  SendPolicyConfigInput,
-  SendPolicyViolation,
-  TransportUnavailableFailure,
-];
-
-export const resendApi = [
-  ResendClient,
-  ResendConfig,
-  ResendConfigInput,
-  clientLayer,
-  config,
-  defaultLayer,
-  layer,
-  makeConfig,
-  policyConfig,
-  policyLayer,
-];
-
-export const testApi = [
-  TestEmailAdapter,
-  TestEmailInspection,
-  testDefaultLayer,
-  testLayer,
-  testPolicyConfig,
-  testPolicyLayer,
-];
-
-export type PublicApiTypes = {
-  readonly emailSend: EmailSend;
-  readonly resendConfig: ResendConfigShape;
-  readonly sendFailure: SendFailure;
-  readonly sendPolicyConfig: SendPolicyConfig;
-  readonly sendReceipt: SendReceipt;
+type PublicApiContract = {
+  readonly root:
+    | typeof Attachment
+    | typeof AuthenticationFailure
+    | typeof Email
+    | typeof EmailMessage
+    | typeof EmailMessageValidationFailure
+    | typeof Mailbox
+    | typeof MailboxValidationFailure
+    | typeof MessageBody
+    | typeof MessageContentValidationFailure
+    | typeof ProviderProtocolFailure
+    | typeof RateLimitFailure
+    | typeof RejectedMessageFailure
+    | typeof SendPolicy
+    | typeof SendPolicyViolation
+    | typeof TransportUnavailableFailure
+    | AttachmentShape
+    | AttachmentInput
+    | DisplayName
+    | EmailAddress
+    | EmailMessageShape
+    | EmailMessageInput
+    | EmailSend
+    | MailboxShape
+    | MailboxInput
+    | MediaType
+    | MessageBodyShape
+    | MessageBodyInput
+    | SendFailure
+    | SendPolicyConfig
+    | SendReceipt;
+  readonly resend:
+    | typeof ResendClient
+    | typeof ResendConfig
+    | typeof clientLayer
+    | typeof defaultLayer
+    | typeof layer
+    | typeof makeConfig
+    | typeof policyConfig
+    | ResendConfigInput
+    | ResendConfigShape;
+  readonly test: typeof TestEmailInspection | typeof testDefaultLayer | typeof testLayer;
 };
+
+export type { PublicApiContract };

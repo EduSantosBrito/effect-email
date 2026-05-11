@@ -46,7 +46,7 @@ export class TestEmailInspection extends Context.Service<
   };
 }
 
-export class TestEmailAdapter extends Context.Service<
+class TestEmailAdapter extends Context.Service<
   TestEmailAdapter,
   {
     readonly send: (message: EmailMessage) => Effect.Effect<SendReceipt, SendFailure>;
@@ -89,8 +89,8 @@ const testEmailLayer = Layer.effect(
   }),
 ).pipe(Layer.provideMerge(testEmailAdapterLayer));
 
-export const policyConfig = SendPolicy.defaultConfig;
-export const policyLayer: Layer.Layer<SendPolicy> = Layer.succeed(
+const policyConfig = SendPolicy.defaultConfig;
+const policyLayer: Layer.Layer<SendPolicy> = Layer.succeed(
   SendPolicy,
   SendPolicy.layer(policyConfig),
 );

@@ -2,6 +2,8 @@
 
 Sends one email through Resend with the same Effect beta used by the SDK.
 
+Requires `RESEND_API_KEY` and `EMAIL_DOMAIN` in `.env`.
+
 ```sh
 bun install
 cp .env.example .env

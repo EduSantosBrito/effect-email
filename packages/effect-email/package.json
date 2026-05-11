@@ -1,7 +1,12 @@
 {
   "name": "effect-email",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "TypeScript SDK for effect-email.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/EduSantosBrito/effect-email",
+    "directory": "packages/effect-email"
+  },
   "files": [
     "dist"
   ],

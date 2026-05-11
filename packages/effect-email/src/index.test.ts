@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ConfigProvider, Effect, Layer, Predicate, Redacted, Ref, Result, Schema } from "effect";
+import { Effect, Layer, Predicate, Redacted, Ref, Result, Schema } from "effect";
 import {
   HttpClient,
   HttpClientError,
@@ -10,15 +10,15 @@ import {
   Attachment,
   Email,
   EmailMessage,
-  EmailMessageInput,
   Mailbox,
   MessageBody,
   SendPolicy,
+  type EmailMessageInput,
 } from "./index";
 import * as Resend from "./resend";
 import * as TestEmail from "./test";
 
-const makeMessage = (input: Partial<typeof EmailMessageInput.Type> = {}) =>
+const makeMessage = (input: Partial<EmailMessageInput> = {}) =>
   EmailMessage.make({
     from: "Sender <sender@example.com>",
     to: "you@example.com",
@@ -29,7 +29,7 @@ const makeMessage = (input: Partial<typeof EmailMessageInput.Type> = {}) =>
 
 const provideResend = (
   client: HttpClient.HttpClient,
-  policy: Layer.Layer<SendPolicy> = Resend.policyLayer,
+  policy: Layer.Layer<SendPolicy> = Layer.succeed(SendPolicy)(SendPolicy.layer(Resend.policyConfig)),
 ): Layer.Layer<Email> =>
   Resend.layer.pipe(
     Layer.provide(
@@ -88,7 +88,7 @@ describe("effect-email constructors", () => {
   it.effect("fails fast with top-level field and reason", () =>
     Effect.gen(function* () {
       const cases: ReadonlyArray<
-        readonly [Partial<typeof EmailMessageInput.Type>, string, string]
+        readonly [Partial<EmailMessageInput>, string, string]
       > = [
         [{ from: "bad(comment)@example.com" }, "from", "InvalidEmailAddress"],
         [{ to: [] }, "to", "EmptyRecipients"],
@@ -339,25 +339,8 @@ describe("effect-email Resend adapter", () => {
       }).pipe(Effect.provide(provideResend(malformedClient)), Effect.flip);
       assert.ok(Predicate.isTagged(malformedFailure, "ProviderProtocolFailure"));
 
-      const config = yield* Resend.config
-        .asEffect()
-        .pipe(
-          Effect.provide(
-            ConfigProvider.layer(ConfigProvider.fromEnv({ env: { RESEND_API_KEY: "secret" } })),
-          ),
-        );
+      const config = Resend.makeConfig("secret");
       assert.deepStrictEqual(config, { apiKey: Redacted.make("secret") });
-      assert.strictEqual(
-        (yield* Resend.config
-          .asEffect()
-          .pipe(
-            Effect.provide(
-              ConfigProvider.layer(ConfigProvider.fromEnv({ env: { RESEND_API_KEY: "" } })),
-            ),
-            Effect.exit,
-          ))._tag,
-        "Failure",
-      );
     }),
   );
 });

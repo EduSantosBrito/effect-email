@@ -20,15 +20,16 @@ import {
   TransportUnavailableFailure,
 } from "./index";
 
-export const ResendConfigInput = Schema.Struct({
+const ResendConfigInput = Schema.Struct({
   apiKey: Schema.Redacted(Schema.String),
 });
+export type ResendConfigInput = typeof ResendConfigInput.Type;
 
 export interface ResendConfigShape {
   readonly apiKey: Redacted.Redacted<string>;
 }
 
-export const config: Config.Config<typeof ResendConfigInput.Type> = Config.map(
+const config: Config.Config<ResendConfigInput> = Config.map(
   Config.nonEmptyString("RESEND_API_KEY"),
   (apiKey) => ({ apiKey: Redacted.make(apiKey) }),
 );
@@ -173,7 +174,7 @@ const executeResendSend = (
 
 export const policyConfig: typeof SendPolicy.defaultConfig = SendPolicy.defaultConfig;
 
-export const policyLayer: Layer.Layer<SendPolicy> = Layer.succeed(
+const policyLayer: Layer.Layer<SendPolicy> = Layer.succeed(
   SendPolicy,
   SendPolicy.layer(policyConfig),
 );

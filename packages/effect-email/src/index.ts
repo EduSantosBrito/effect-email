@@ -42,17 +42,19 @@ export interface SendReceipt {
   readonly messageId: string;
 }
 
-export const MailboxInput = Schema.Struct({
+const MailboxInputSchema = Schema.Struct({
   address: Schema.Unknown,
   displayName: Schema.optional(Schema.Unknown),
 });
+export type MailboxInput = typeof MailboxInputSchema.Type;
 
-export const MessageBodyInput = Schema.Struct({
+const MessageBodyInputSchema = Schema.Struct({
   text: Schema.optional(Schema.Unknown),
   html: Schema.optional(Schema.Unknown),
 });
+export type MessageBodyInput = typeof MessageBodyInputSchema.Type;
 
-export const AttachmentInput = Schema.Struct({
+const AttachmentInputSchema = Schema.Struct({
   name: Schema.Unknown,
   mediaType: Schema.Unknown,
   content: Schema.Unknown,
@@ -60,8 +62,9 @@ export const AttachmentInput = Schema.Struct({
   url: Schema.optional(Schema.Unknown),
   base64: Schema.optional(Schema.Unknown),
 });
+export type AttachmentInput = typeof AttachmentInputSchema.Type;
 
-export const EmailMessageInput = Schema.Struct({
+const EmailMessageInputSchema = Schema.Struct({
   from: Schema.Unknown,
   to: Schema.Unknown,
   cc: Schema.optional(Schema.Unknown),
@@ -73,6 +76,7 @@ export const EmailMessageInput = Schema.Struct({
   html: Schema.optional(Schema.Unknown),
   attachments: Schema.optional(Schema.Unknown),
 });
+export type EmailMessageInput = typeof EmailMessageInputSchema.Type;
 
 export class MailboxValidationFailure extends Schema.TaggedErrorClass<MailboxValidationFailure>()(
   "MailboxValidationFailure",
@@ -182,7 +186,7 @@ export type SendFailure =
   | TransportUnavailableFailure
   | ProviderProtocolFailure;
 
-export const SendPolicyConfigInput = Schema.Struct({
+const SendPolicyConfigInputSchema = Schema.Struct({
   maxRecipients: Schema.Number,
   maxSubjectBytes: Schema.Number,
   maxTextBodyBytes: Schema.Number,
@@ -192,7 +196,7 @@ export const SendPolicyConfigInput = Schema.Struct({
   maxTotalAttachmentBytes: Schema.Number,
 });
 
-export type SendPolicyConfig = typeof SendPolicyConfigInput.Type;
+export type SendPolicyConfig = typeof SendPolicyConfigInputSchema.Type;
 
 export type EmailSend = (message: EmailMessage) => Effect.Effect<SendReceipt, SendFailure>;
 const EmailSendSchema = Schema.declare<EmailSend>(
@@ -205,10 +209,10 @@ const EmailInput = Schema.Struct({
 const decodeEmailAddress = Schema.decodeUnknownEffect(EmailAddress);
 const decodeDisplayName = Schema.decodeUnknownEffect(DisplayName);
 const decodeMediaType = Schema.decodeUnknownEffect(MediaType);
-const decodeMailboxInput = Schema.decodeUnknownEffect(MailboxInput);
-const decodeMessageBodyInput = Schema.decodeUnknownEffect(MessageBodyInput);
-const decodeAttachmentInput = Schema.decodeUnknownEffect(AttachmentInput);
-const decodeEmailMessageInput = Schema.decodeUnknownEffect(EmailMessageInput);
+const decodeMailboxInput = Schema.decodeUnknownEffect(MailboxInputSchema);
+const decodeMessageBodyInput = Schema.decodeUnknownEffect(MessageBodyInputSchema);
+const decodeAttachmentInput = Schema.decodeUnknownEffect(AttachmentInputSchema);
+const decodeEmailMessageInput = Schema.decodeUnknownEffect(EmailMessageInputSchema);
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
 const hasText = (value: string) => value.trim().length > 0;
@@ -449,7 +453,7 @@ const parseAttachments: (
 });
 
 const parseEmailMessage: (
-  input: typeof EmailMessageInput.Type,
+  input: EmailMessageInput,
 ) => Effect.Effect<EmailMessage, EmailMessageValidationFailure> = Effect.fnUntraced(
   function* (input) {
     const raw = yield* decodeEmailMessageInput(input).pipe(
@@ -541,7 +545,7 @@ export class SendPolicy extends Context.Service<
     readonly validate: (message: EmailMessage) => Effect.Effect<EmailMessage, SendPolicyViolation>;
   }
 >()("SendPolicy") {
-  static readonly defaultConfig: typeof SendPolicyConfigInput.Type = {
+  static readonly defaultConfig: SendPolicyConfig = {
     maxRecipients: 50,
     maxSubjectBytes: 998,
     maxTextBodyBytes: 1_000_000,
@@ -551,8 +555,8 @@ export class SendPolicy extends Context.Service<
     maxTotalAttachmentBytes: 40_000_000,
   };
 
-  static readonly layer = (input: Partial<typeof SendPolicyConfigInput.Type> = {}) => {
-    const config = SendPolicyConfigInput.make({ ...SendPolicy.defaultConfig, ...input });
+  static readonly layer = (input: Partial<SendPolicyConfig> = {}) => {
+    const config = SendPolicyConfigInputSchema.make({ ...SendPolicy.defaultConfig, ...input });
     return SendPolicy.of({
       ...config,
       validate: (message) =>
