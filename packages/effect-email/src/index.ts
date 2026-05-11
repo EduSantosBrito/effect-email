@@ -1,4 +1,4 @@
-import { Config, Context, Data, Effect, Layer, Redacted, Ref, Schema } from "effect";
+import { Config, Context, Data, Effect, Layer, Option, Redacted, Ref, Schema } from "effect";
 
 export const EmailAddress = Schema.String.pipe(Schema.brand("EmailAddress"));
 export type EmailAddress = typeof EmailAddress.Type;
@@ -12,12 +12,6 @@ export interface Mailbox {
   readonly displayName?: DisplayName;
 }
 
-export interface RecipientLists {
-  readonly to: readonly Mailbox[];
-  readonly cc?: readonly Mailbox[];
-  readonly bcc?: readonly Mailbox[];
-}
-
 export interface Attachment {
   readonly name: string;
   readonly mediaType: MediaType;
@@ -29,23 +23,56 @@ export type MessageBody = Data.TaggedEnum<{
   HtmlOnly: { readonly html: string };
   TextAndHtml: { readonly text: string; readonly html: string };
 }>;
-export const MessageBody = Data.taggedEnum<MessageBody>();
+
+const MessageBodyVariants = Data.taggedEnum<MessageBody>();
 
 export interface EmailMessage {
   readonly from: Mailbox;
-  readonly to: readonly Mailbox[];
-  readonly cc?: readonly Mailbox[];
-  readonly bcc?: readonly Mailbox[];
-  readonly replyTo?: readonly Mailbox[];
+  readonly to: readonly [Mailbox, ...Mailbox[]];
+  readonly cc?: readonly [Mailbox, ...Mailbox[]];
+  readonly bcc?: readonly [Mailbox, ...Mailbox[]];
+  readonly replyTo?: readonly [Mailbox, ...Mailbox[]];
   readonly subject: string;
   readonly body: MessageBody;
-  readonly attachments?: readonly Attachment[];
+  readonly attachments?: readonly [Attachment, ...Attachment[]];
 }
 
 export interface SendReceipt {
   readonly provider: "test" | "resend";
   readonly messageId: string;
 }
+
+export const MailboxInput = Schema.Struct({
+  address: Schema.Unknown,
+  displayName: Schema.optional(Schema.Unknown),
+});
+
+export const MessageBodyInput = Schema.Struct({
+  text: Schema.optional(Schema.Unknown),
+  html: Schema.optional(Schema.Unknown),
+});
+
+export const AttachmentInput = Schema.Struct({
+  name: Schema.Unknown,
+  mediaType: Schema.Unknown,
+  content: Schema.Unknown,
+  path: Schema.optional(Schema.Unknown),
+  url: Schema.optional(Schema.Unknown),
+  base64: Schema.optional(Schema.Unknown),
+});
+
+export const EmailMessageInput = Schema.Struct({
+  from: Schema.Unknown,
+  to: Schema.Unknown,
+  cc: Schema.optional(Schema.Unknown),
+  bcc: Schema.optional(Schema.Unknown),
+  replyTo: Schema.optional(Schema.Unknown),
+  subject: Schema.Unknown,
+  body: Schema.optional(Schema.Unknown),
+  text: Schema.optional(Schema.Unknown),
+  html: Schema.optional(Schema.Unknown),
+  attachments: Schema.optional(Schema.Unknown),
+});
 
 export class MailboxValidationFailure extends Schema.TaggedErrorClass<MailboxValidationFailure>()(
   "MailboxValidationFailure",
@@ -65,6 +92,37 @@ export class MessageContentValidationFailure extends Schema.TaggedErrorClass<Mes
     reason: Schema.Literals([
       "InvalidSubject",
       "EmptyBody",
+      "InvalidTextBody",
+      "InvalidHtmlBody",
+      "InvalidAttachmentName",
+      "InvalidMediaType",
+      "InvalidAttachmentContent",
+    ]),
+  },
+) {}
+
+export class EmailMessageValidationFailure extends Schema.TaggedErrorClass<EmailMessageValidationFailure>()(
+  "EmailMessageValidationFailure",
+  {
+    field: Schema.Literals([
+      "from",
+      "to",
+      "cc",
+      "bcc",
+      "replyTo",
+      "subject",
+      "body",
+      "attachments",
+    ]),
+    reason: Schema.Literals([
+      "InvalidEmailAddress",
+      "InvalidDisplayName",
+      "EmptyRecipients",
+      "DuplicateRecipient",
+      "InvalidSubject",
+      "EmptyBody",
+      "InvalidTextBody",
+      "InvalidHtmlBody",
       "InvalidAttachmentName",
       "InvalidMediaType",
       "InvalidAttachmentContent",
@@ -124,7 +182,7 @@ export type SendFailure =
   | TransportUnavailableFailure
   | ProviderProtocolFailure;
 
-export const SendPolicyServiceInput = Schema.Struct({
+export const SendPolicyConfigInput = Schema.Struct({
   maxRecipients: Schema.Number,
   maxSubjectBytes: Schema.Number,
   maxTextBodyBytes: Schema.Number,
@@ -133,17 +191,24 @@ export const SendPolicyServiceInput = Schema.Struct({
   maxAttachmentBytes: Schema.Number,
   maxTotalAttachmentBytes: Schema.Number,
 });
-export type SendPolicy = typeof SendPolicyServiceInput.Type;
 
-export const defaultSendPolicy: SendPolicy = {
-  maxRecipients: 50,
-  maxSubjectBytes: 998,
-  maxTextBodyBytes: 1_000_000,
-  maxHtmlBodyBytes: 1_000_000,
-  maxAttachments: 10,
-  maxAttachmentBytes: 10_000_000,
-  maxTotalAttachmentBytes: 40_000_000,
-};
+export type SendPolicyConfig = typeof SendPolicyConfigInput.Type;
+
+export type EmailSend = (message: EmailMessage) => Effect.Effect<SendReceipt, SendFailure>;
+const EmailSendSchema = Schema.declare<EmailSend>(
+  (input): input is EmailSend => typeof input === "function",
+);
+const EmailInput = Schema.Struct({
+  send: EmailSendSchema,
+});
+
+const decodeEmailAddress = Schema.decodeUnknownEffect(EmailAddress);
+const decodeDisplayName = Schema.decodeUnknownEffect(DisplayName);
+const decodeMediaType = Schema.decodeUnknownEffect(MediaType);
+const decodeMailboxInput = Schema.decodeUnknownEffect(MailboxInput);
+const decodeMessageBodyInput = Schema.decodeUnknownEffect(MessageBodyInput);
+const decodeAttachmentInput = Schema.decodeUnknownEffect(AttachmentInput);
+const decodeEmailMessageInput = Schema.decodeUnknownEffect(EmailMessageInput);
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
 const hasText = (value: string) => value.trim().length > 0;
@@ -151,8 +216,10 @@ const addressPattern =
   /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
 const mediaTypePattern =
   /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*(?:\s*;\s*[A-Za-z0-9!#$&^_.+-]+=[A-Za-z0-9!#$&^_.+-]+)*$/;
+const stringMailboxPattern = /^([^<>,;@]+)<([^<>]+)>$/u;
 
 const normalizeAddress = (address: string): string => address.toLowerCase();
+
 const hasControlCharacter = (value: string): boolean => {
   for (const character of value) {
     const code = character.charCodeAt(0);
@@ -161,39 +228,294 @@ const hasControlCharacter = (value: string): boolean => {
   return false;
 };
 
-const RawMailbox = Schema.Struct({
-  address: Schema.Unknown,
-  displayName: Schema.optional(Schema.Unknown),
-});
-const RawRecipients = Schema.Struct({
-  to: Schema.optional(Schema.Array(Schema.Unknown)),
-  cc: Schema.optional(Schema.Array(Schema.Unknown)),
-  bcc: Schema.optional(Schema.Array(Schema.Unknown)),
-});
-const RawBody = Schema.Struct({
-  text: Schema.optional(Schema.Unknown),
-  html: Schema.optional(Schema.Unknown),
-});
-const RawAttachment = Schema.Struct({
-  name: Schema.Unknown,
-  mediaType: Schema.Unknown,
-  content: Schema.Unknown,
-  path: Schema.optional(Schema.Unknown),
-  url: Schema.optional(Schema.Unknown),
-  base64: Schema.optional(Schema.Unknown),
-});
-const decodeEmailAddress = Schema.decodeUnknownEffect(EmailAddress);
-const decodeDisplayName = Schema.decodeUnknownEffect(DisplayName);
-const decodeMediaType = Schema.decodeUnknownEffect(MediaType);
-const decodeRawMailbox = Schema.decodeUnknownEffect(RawMailbox);
-const decodeRawRecipients = Schema.decodeUnknownEffect(RawRecipients);
-const decodeRawBody = Schema.decodeUnknownEffect(RawBody);
-const decodeRawAttachment = Schema.decodeUnknownEffect(RawAttachment);
+const isOptionInput = (input: unknown): input is Option.Option<unknown> => Option.isOption(input);
 
-const formatAddress = (mailbox: Mailbox): string =>
-  mailbox.displayName === undefined
-    ? mailbox.address
-    : `${mailbox.displayName} <${mailbox.address}>`;
+const optionalValue = (input: unknown): unknown | undefined => {
+  if (input === undefined) return undefined;
+  if (isOptionInput(input)) return Option.isNone(input) ? undefined : input.value;
+  return input;
+};
+
+const parseEmailAddress: (input: unknown) => Effect.Effect<EmailAddress, MailboxValidationFailure> =
+  Effect.fnUntraced(function* (input) {
+    if (
+      typeof input !== "string" ||
+      input.length > 254 ||
+      [...input].some((character) => character.charCodeAt(0) > 127) ||
+      input.includes('"') ||
+      input.includes("(") ||
+      input.includes(")") ||
+      !addressPattern.test(input.trim())
+    ) {
+      return yield* new MailboxValidationFailure({ reason: "InvalidEmailAddress" });
+    }
+    return yield* decodeEmailAddress(normalizeAddress(input.trim())).pipe(
+      Effect.mapError(() => new MailboxValidationFailure({ reason: "InvalidEmailAddress" })),
+    );
+  });
+
+const parseDisplayName: (
+  input: unknown,
+  options: { readonly allowObjectDelimiters: boolean },
+) => Effect.Effect<DisplayName, MailboxValidationFailure> = Effect.fnUntraced(
+  function* (input, options) {
+    if (typeof input !== "string") {
+      return yield* new MailboxValidationFailure({ reason: "InvalidDisplayName" });
+    }
+    const displayName = input.trim();
+    const delimiterPattern = options.allowObjectDelimiters ? /[<>]/u : /[<>,;@]/u;
+    if (
+      displayName.length === 0 ||
+      hasControlCharacter(displayName) ||
+      delimiterPattern.test(displayName)
+    ) {
+      return yield* new MailboxValidationFailure({ reason: "InvalidDisplayName" });
+    }
+    return yield* decodeDisplayName(displayName).pipe(
+      Effect.mapError(() => new MailboxValidationFailure({ reason: "InvalidDisplayName" })),
+    );
+  },
+);
+
+const parseMailboxString: (input: string) => Effect.Effect<Mailbox, MailboxValidationFailure> =
+  Effect.fnUntraced(function* (input) {
+    const value = input.trim();
+    const match = stringMailboxPattern.exec(value);
+    if (match === null) {
+      return { address: yield* parseEmailAddress(value) };
+    }
+    const displayName = yield* parseDisplayName(match[1], { allowObjectDelimiters: false });
+    const address = yield* parseEmailAddress(match[2]);
+    return { address, displayName };
+  });
+
+const parseMailbox: (input: unknown) => Effect.Effect<Mailbox, MailboxValidationFailure> =
+  Effect.fnUntraced(function* (input) {
+    if (typeof input === "string") {
+      return yield* parseMailboxString(input);
+    }
+    const raw = yield* decodeMailboxInput(input).pipe(
+      Effect.mapError(() => new MailboxValidationFailure({ reason: "InvalidEmailAddress" })),
+    );
+    const address = yield* parseEmailAddress(raw.address);
+    const displayNameInput = optionalValue(raw.displayName);
+    if (displayNameInput === undefined) return { address };
+    const displayName = yield* parseDisplayName(displayNameInput, { allowObjectDelimiters: true });
+    return { address, displayName };
+  });
+
+const nonEmptyMailboxArray: (
+  input: unknown,
+) => Effect.Effect<readonly [Mailbox, ...Mailbox[]], MailboxValidationFailure> = Effect.fnUntraced(
+  function* (input) {
+    const value = optionalValue(input);
+    const array = Array.isArray(value) ? value : value === undefined ? [] : [value];
+    if (array.length === 0) {
+      return yield* new MailboxValidationFailure({ reason: "EmptyRecipients" });
+    }
+    const head = yield* parseMailbox(array[0]);
+    const tail = yield* Effect.all(array.slice(1).map(parseMailbox));
+    return [head, ...tail];
+  },
+);
+
+const nonEmptyAttachmentArray: (
+  input: unknown,
+) => Effect.Effect<readonly [Attachment, ...Attachment[]], MessageContentValidationFailure> =
+  Effect.fnUntraced(function* (input) {
+    const value = optionalValue(input);
+    const array = Array.isArray(value) ? value : value === undefined ? [] : [value];
+    if (array.length === 0) {
+      return yield* new MessageContentValidationFailure({ reason: "InvalidAttachmentContent" });
+    }
+    const head = yield* parseAttachment(array[0]);
+    const tail = yield* Effect.all(array.slice(1).map(parseAttachment));
+    return [head, ...tail];
+  });
+
+const parseSubject: (input: unknown) => Effect.Effect<string, MessageContentValidationFailure> =
+  Effect.fnUntraced(function* (input) {
+    if (
+      typeof input === "string" &&
+      hasText(input) &&
+      !input.includes("\r") &&
+      !input.includes("\n") &&
+      !hasControlCharacter(input)
+    ) {
+      return input;
+    }
+    return yield* new MessageContentValidationFailure({ reason: "InvalidSubject" });
+  });
+
+const parseMessageBody: (
+  input: unknown,
+) => Effect.Effect<MessageBody, MessageContentValidationFailure> = Effect.fnUntraced(
+  function* (input) {
+    const raw = yield* decodeMessageBodyInput(input).pipe(
+      Effect.mapError(() => new MessageContentValidationFailure({ reason: "EmptyBody" })),
+    );
+    const textInput = optionalValue(raw.text);
+    const htmlInput = optionalValue(raw.html);
+    const textSupplied = textInput !== undefined;
+    const htmlSupplied = htmlInput !== undefined;
+    if (!textSupplied && !htmlSupplied) {
+      return yield* new MessageContentValidationFailure({ reason: "EmptyBody" });
+    }
+    if (textSupplied && (typeof textInput !== "string" || !hasText(textInput))) {
+      return yield* new MessageContentValidationFailure({ reason: "InvalidTextBody" });
+    }
+    if (htmlSupplied && (typeof htmlInput !== "string" || !hasText(htmlInput))) {
+      return yield* new MessageContentValidationFailure({ reason: "InvalidHtmlBody" });
+    }
+    if (textSupplied && htmlSupplied) {
+      return MessageBodyVariants.TextAndHtml({ text: textInput, html: htmlInput });
+    }
+    if (textSupplied) return MessageBodyVariants.TextOnly({ text: textInput });
+    if (typeof htmlInput === "string") return MessageBodyVariants.HtmlOnly({ html: htmlInput });
+    return yield* new MessageContentValidationFailure({ reason: "InvalidHtmlBody" });
+  },
+);
+
+const parseAttachment: (
+  input: unknown,
+) => Effect.Effect<Attachment, MessageContentValidationFailure> = Effect.fnUntraced(
+  function* (input) {
+    const raw = yield* decodeAttachmentInput(input).pipe(
+      Effect.mapError(
+        () => new MessageContentValidationFailure({ reason: "InvalidAttachmentContent" }),
+      ),
+    );
+    if (raw.path !== undefined || raw.url !== undefined || raw.base64 !== undefined) {
+      return yield* new MessageContentValidationFailure({ reason: "InvalidAttachmentContent" });
+    }
+    if (
+      typeof raw.name !== "string" ||
+      !hasText(raw.name) ||
+      raw.name.includes("/") ||
+      raw.name.includes("\\") ||
+      raw.name.includes("..") ||
+      hasControlCharacter(raw.name) ||
+      /[<>:"|?*]/u.test(raw.name)
+    ) {
+      return yield* new MessageContentValidationFailure({ reason: "InvalidAttachmentName" });
+    }
+    if (typeof raw.mediaType !== "string" || !mediaTypePattern.test(raw.mediaType)) {
+      return yield* new MessageContentValidationFailure({ reason: "InvalidMediaType" });
+    }
+    if (!(raw.content instanceof Uint8Array)) {
+      return yield* new MessageContentValidationFailure({ reason: "InvalidAttachmentContent" });
+    }
+    return {
+      name: raw.name,
+      mediaType: yield* decodeMediaType(raw.mediaType.toLowerCase()).pipe(
+        Effect.mapError(() => new MessageContentValidationFailure({ reason: "InvalidMediaType" })),
+      ),
+      content: raw.content,
+    };
+  },
+);
+
+const mapMailboxFailure = (field: EmailMessageValidationFailure["field"]) =>
+  Effect.mapError(
+    (failure: MailboxValidationFailure) =>
+      new EmailMessageValidationFailure({ field, reason: failure.reason }),
+  );
+
+const mapContentFailure = (field: EmailMessageValidationFailure["field"]) =>
+  Effect.mapError(
+    (failure: MessageContentValidationFailure) =>
+      new EmailMessageValidationFailure({ field, reason: failure.reason }),
+  );
+
+const parseMessageMailboxList: (
+  field: "to" | "cc" | "bcc" | "replyTo",
+  input: unknown,
+) => Effect.Effect<readonly [Mailbox, ...Mailbox[]] | undefined, EmailMessageValidationFailure> =
+  Effect.fnUntraced(function* (field, input) {
+    const value = optionalValue(input);
+    if (value === undefined) return undefined;
+    return yield* nonEmptyMailboxArray(value).pipe(mapMailboxFailure(field));
+  });
+
+const parseAttachments: (
+  input: unknown,
+) => Effect.Effect<
+  readonly [Attachment, ...Attachment[]] | undefined,
+  EmailMessageValidationFailure
+> = Effect.fnUntraced(function* (input) {
+  const value = optionalValue(input);
+  if (value === undefined) return undefined;
+  return yield* nonEmptyAttachmentArray(value).pipe(mapContentFailure("attachments"));
+});
+
+const parseEmailMessage: (
+  input: typeof EmailMessageInput.Type,
+) => Effect.Effect<EmailMessage, EmailMessageValidationFailure> = Effect.fnUntraced(
+  function* (input) {
+    const raw = yield* decodeEmailMessageInput(input).pipe(
+      Effect.mapError(
+        () => new EmailMessageValidationFailure({ field: "from", reason: "InvalidEmailAddress" }),
+      ),
+    );
+    if (raw.body !== undefined && (raw.text !== undefined || raw.html !== undefined)) {
+      return yield* new EmailMessageValidationFailure({ field: "body", reason: "EmptyBody" });
+    }
+    const from = yield* parseMailbox(raw.from).pipe(mapMailboxFailure("from"));
+    const to = yield* nonEmptyMailboxArray(raw.to).pipe(mapMailboxFailure("to"));
+    const cc = yield* parseMessageMailboxList("cc", raw.cc);
+    const bcc = yield* parseMessageMailboxList("bcc", raw.bcc);
+    const replyTo = yield* parseMessageMailboxList("replyTo", raw.replyTo);
+    const seen = new Set<string>();
+    const checkDuplicates = Effect.fnUntraced(function* (
+      field: "to" | "cc" | "bcc",
+      list: readonly Mailbox[] | undefined,
+    ) {
+      for (const mailbox of list ?? []) {
+        if (seen.has(mailbox.address)) {
+          return yield* new EmailMessageValidationFailure({ field, reason: "DuplicateRecipient" });
+        }
+        seen.add(mailbox.address);
+      }
+    });
+    yield* checkDuplicates("to", to);
+    yield* checkDuplicates("cc", cc);
+    yield* checkDuplicates("bcc", bcc);
+    const subject = yield* parseSubject(raw.subject).pipe(mapContentFailure("subject"));
+    const bodyInput = raw.body === undefined ? { text: raw.text, html: raw.html } : raw.body;
+    const body = yield* parseMessageBody(bodyInput).pipe(mapContentFailure("body"));
+    const attachments = yield* parseAttachments(raw.attachments);
+    return {
+      from,
+      to,
+      ...(cc !== undefined ? { cc } : {}),
+      ...(bcc !== undefined ? { bcc } : {}),
+      ...(replyTo !== undefined ? { replyTo } : {}),
+      subject,
+      body,
+      ...(attachments !== undefined ? { attachments } : {}),
+    };
+  },
+);
+
+export const Mailbox = {
+  make: parseMailbox,
+};
+
+export const MessageBody = {
+  TextOnly: MessageBodyVariants.TextOnly,
+  HtmlOnly: MessageBodyVariants.HtmlOnly,
+  TextAndHtml: MessageBodyVariants.TextAndHtml,
+  $match: MessageBodyVariants.$match,
+  make: parseMessageBody,
+};
+
+export const Attachment = {
+  make: parseAttachment,
+};
+
+export const EmailMessage = {
+  make: parseEmailMessage,
+};
 
 const bodyHasContent = MessageBody.$match({
   TextOnly: ({ text }) => hasText(text),
@@ -213,20 +535,6 @@ const htmlBodyBytes = MessageBody.$match({
   TextAndHtml: ({ html }) => utf8Bytes(html),
 });
 
-const MailboxParserInput = Schema.Struct({});
-
-const MessageContentParserInput = Schema.Struct({});
-
-export type EmailSend = (message: EmailMessage) => Effect.Effect<SendReceipt, SendFailure>;
-
-const EmailSendSchema = Schema.declare<EmailSend>(
-  (input): input is EmailSend => typeof input === "function",
-);
-
-const EmailInput = Schema.Struct({
-  send: EmailSendSchema,
-});
-
 const TestEmailInspectionState = Schema.declare<Ref.Ref<readonly EmailMessage[]>>(
   (input): input is Ref.Ref<readonly EmailMessage[]> =>
     typeof input === "object" && input !== null && Object.hasOwn(input, "ref"),
@@ -236,224 +544,40 @@ const TestEmailInspectionInput = Schema.Struct({
   state: TestEmailInspectionState,
 });
 
-const SendPolicyServiceInstance = Schema.declare<SendPolicyServiceShape>(
-  (input): input is SendPolicyServiceShape =>
+const SendPolicyInstance = Schema.declare<typeof SendPolicy.Service>(
+  (input): input is typeof SendPolicy.Service =>
     typeof input === "object" && input !== null && Object.hasOwn(input, "validate"),
 );
 
-const TestEmailInspectionInstance = Schema.declare<TestEmailInspectionShape>(
-  (input): input is TestEmailInspectionShape =>
+const TestEmailInspectionInstance = Schema.declare<typeof TestEmailInspection.Service>(
+  (input): input is typeof TestEmailInspection.Service =>
     typeof input === "object" && input !== null && Object.hasOwn(input, "record"),
 );
 
 const TestEmailAdapterInput = Schema.Struct({
   inspection: TestEmailInspectionInstance,
-  policy: SendPolicyServiceInstance,
+  policy: SendPolicyInstance,
 });
 
-const parseEmailAddress: (input: unknown) => Effect.Effect<EmailAddress, MailboxValidationFailure> =
-  Effect.fnUntraced(function* (input) {
-    if (
-      typeof input !== "string" ||
-      input.length > 254 ||
-      [...input].some((character) => character.charCodeAt(0) > 127) ||
-      input.includes('"') ||
-      input.includes("(") ||
-      input.includes(")") ||
-      !addressPattern.test(input)
-    ) {
-      return yield* new MailboxValidationFailure({ reason: "InvalidEmailAddress" });
-    }
-    return yield* decodeEmailAddress(normalizeAddress(input)).pipe(
-      Effect.mapError(() => new MailboxValidationFailure({ reason: "InvalidEmailAddress" })),
-    );
-  });
-
-const parseDisplayName = (input: unknown): Effect.Effect<DisplayName, MailboxValidationFailure> =>
-  Effect.suspend(() => {
-    if (
-      typeof input !== "string" ||
-      input.trim().length === 0 ||
-      hasControlCharacter(input) ||
-      /[<>,;@]/u.test(input)
-    ) {
-      return Effect.fail(new MailboxValidationFailure({ reason: "InvalidDisplayName" }));
-    }
-    return decodeDisplayName(input).pipe(
-      Effect.mapError(() => new MailboxValidationFailure({ reason: "InvalidDisplayName" })),
-    );
-  });
-
-const parseMailbox: (input: unknown) => Effect.Effect<Mailbox, MailboxValidationFailure> =
-  Effect.fnUntraced(function* (input) {
-    const raw = yield* decodeRawMailbox(input).pipe(
-      Effect.mapError(() => new MailboxValidationFailure({ reason: "InvalidEmailAddress" })),
-    );
-    const address = yield* parseEmailAddress(raw.address);
-    if (raw.displayName === undefined) {
-      return { address };
-    }
-    const displayName = yield* parseDisplayName(raw.displayName);
-    return { address, displayName };
-  });
-
-const parseRecipients: (input: unknown) => Effect.Effect<RecipientLists, MailboxValidationFailure> =
-  Effect.fnUntraced(function* (input) {
-    const raw = yield* decodeRawRecipients(input).pipe(
-      Effect.mapError(() => new MailboxValidationFailure({ reason: "EmptyRecipients" })),
-    );
-    const empty: readonly Mailbox[] = [];
-    const decodeList: (
-      value: unknown,
-    ) => Effect.Effect<readonly Mailbox[], MailboxValidationFailure> = Effect.fnUntraced(
-      function* (value) {
-        if (value === undefined) return empty;
-        if (Array.isArray(value)) return yield* Effect.all(value.map(parseMailbox));
-        return yield* new MailboxValidationFailure({ reason: "EmptyRecipients" });
-      },
-    );
-    const to = yield* decodeList(raw.to);
-    const cc = yield* decodeList(raw.cc);
-    const bcc = yield* decodeList(raw.bcc);
-    const all = [...to, ...cc, ...bcc];
-    if (all.length === 0) {
-      return yield* new MailboxValidationFailure({ reason: "EmptyRecipients" });
-    }
-    const seen = new Set<string>();
-    for (const mailbox of all) {
-      if (seen.has(mailbox.address)) {
-        return yield* new MailboxValidationFailure({ reason: "DuplicateRecipient" });
-      }
-      seen.add(mailbox.address);
-    }
-    return { to, ...(cc.length > 0 ? { cc } : {}), ...(bcc.length > 0 ? { bcc } : {}) };
-  });
-
-export class MailboxParser extends Context.Service<
-  MailboxParser,
-  {
-    readonly emailAddress: (
-      input: unknown,
-    ) => Effect.Effect<EmailAddress, MailboxValidationFailure>;
-    readonly address: (input: unknown) => Effect.Effect<EmailAddress, MailboxValidationFailure>;
-    readonly displayName: (input: unknown) => Effect.Effect<DisplayName, MailboxValidationFailure>;
-    readonly mailbox: (input: unknown) => Effect.Effect<Mailbox, MailboxValidationFailure>;
-    readonly recipients: (
-      input: unknown,
-    ) => Effect.Effect<RecipientLists, MailboxValidationFailure>;
-  }
->()("MailboxParser") {
-  static readonly layer = (input: typeof MailboxParserInput.Type) => {
-    const config = MailboxParserInput.make(input);
-    return MailboxParser.of({
-      ...config,
-      emailAddress: parseEmailAddress,
-      address: parseEmailAddress,
-      displayName: parseDisplayName,
-      mailbox: parseMailbox,
-      recipients: parseRecipients,
-    });
-  };
-}
-
-export type MailboxParserShape = typeof MailboxParser.Service;
-
-export class MessageContentParser extends Context.Service<
-  MessageContentParser,
-  {
-    readonly subject: (input: unknown) => Effect.Effect<string, MessageContentValidationFailure>;
-    readonly body: (input: unknown) => Effect.Effect<MessageBody, MessageContentValidationFailure>;
-    readonly attachment: (
-      input: unknown,
-    ) => Effect.Effect<Attachment, MessageContentValidationFailure>;
-  }
->()("MessageContentParser") {
-  static readonly layer = (input: typeof MessageContentParserInput.Type) => {
-    const config = MessageContentParserInput.make(input);
-    return MessageContentParser.of({
-      ...config,
-      subject: (input) =>
-        Effect.gen(function* () {
-          if (
-            typeof input === "string" &&
-            hasText(input) &&
-            !input.includes("\r") &&
-            !input.includes("\n") &&
-            !hasControlCharacter(input)
-          ) {
-            return input;
-          }
-          return yield* new MessageContentValidationFailure({ reason: "InvalidSubject" });
-        }),
-      body: (input) =>
-        Effect.gen(function* () {
-          const raw = yield* decodeRawBody(input).pipe(
-            Effect.mapError(() => new MessageContentValidationFailure({ reason: "EmptyBody" })),
-          );
-          const text = typeof raw.text === "string" && hasText(raw.text) ? raw.text : undefined;
-          const html = typeof raw.html === "string" && hasText(raw.html) ? raw.html : undefined;
-          if (text !== undefined && html !== undefined)
-            return MessageBody.TextAndHtml({ text, html });
-          if (text !== undefined) return MessageBody.TextOnly({ text });
-          if (html !== undefined) return MessageBody.HtmlOnly({ html });
-          return yield* new MessageContentValidationFailure({ reason: "EmptyBody" });
-        }),
-      attachment: (input) =>
-        Effect.gen(function* () {
-          const raw = yield* decodeRawAttachment(input).pipe(
-            Effect.mapError(
-              () => new MessageContentValidationFailure({ reason: "InvalidAttachmentContent" }),
-            ),
-          );
-          if (raw.path !== undefined || raw.url !== undefined || raw.base64 !== undefined) {
-            return yield* new MessageContentValidationFailure({
-              reason: "InvalidAttachmentContent",
-            });
-          }
-          if (
-            typeof raw.name !== "string" ||
-            !hasText(raw.name) ||
-            raw.name.includes("/") ||
-            raw.name.includes("\\") ||
-            raw.name.includes("..") ||
-            hasControlCharacter(raw.name) ||
-            /[<>:"|?*]/u.test(raw.name)
-          ) {
-            return yield* new MessageContentValidationFailure({ reason: "InvalidAttachmentName" });
-          }
-          if (typeof raw.mediaType !== "string" || !mediaTypePattern.test(raw.mediaType)) {
-            return yield* new MessageContentValidationFailure({ reason: "InvalidMediaType" });
-          }
-          if (!(raw.content instanceof Uint8Array)) {
-            return yield* new MessageContentValidationFailure({
-              reason: "InvalidAttachmentContent",
-            });
-          }
-          return {
-            name: raw.name,
-            mediaType: yield* decodeMediaType(raw.mediaType.toLowerCase()).pipe(
-              Effect.mapError(
-                () => new MessageContentValidationFailure({ reason: "InvalidMediaType" }),
-              ),
-            ),
-            content: raw.content,
-          };
-        }),
-    });
-  };
-}
-
-export type MessageContentParserShape = typeof MessageContentParser.Service;
-
-export class SendPolicyService extends Context.Service<
-  SendPolicyService,
-  {
+export class SendPolicy extends Context.Service<
+  SendPolicy,
+  SendPolicyConfig & {
     readonly validate: (message: EmailMessage) => Effect.Effect<EmailMessage, SendPolicyViolation>;
   }
->()("SendPolicyService") {
-  static readonly layer = (input: typeof SendPolicyServiceInput.Type) => {
-    const config = SendPolicyServiceInput.make(input);
-    return SendPolicyService.of({
+>()("SendPolicy") {
+  static readonly defaultConfig: typeof SendPolicyConfigInput.Type = {
+    maxRecipients: 50,
+    maxSubjectBytes: 998,
+    maxTextBodyBytes: 1_000_000,
+    maxHtmlBodyBytes: 1_000_000,
+    maxAttachments: 10,
+    maxAttachmentBytes: 10_000_000,
+    maxTotalAttachmentBytes: 40_000_000,
+  };
+
+  static readonly layer = (input: Partial<typeof SendPolicyConfigInput.Type> = {}) => {
+    const config = SendPolicyConfigInput.make({ ...SendPolicy.defaultConfig, ...input });
+    return SendPolicy.of({
       ...config,
       validate: (message) =>
         Effect.gen(function* () {
@@ -533,8 +657,6 @@ export class SendPolicyService extends Context.Service<
   };
 }
 
-export type SendPolicyServiceShape = typeof SendPolicyService.Service;
-
 export class Email extends Context.Service<
   Email,
   {
@@ -546,18 +668,6 @@ export class Email extends Context.Service<
     return Email.of({ ...config });
   };
 }
-
-export type EmailShape = typeof Email.Service;
-
-export const parserLayer = Layer.mergeAll(
-  Layer.succeed(MailboxParser)(MailboxParser.layer({})),
-  Layer.succeed(MessageContentParser)(MessageContentParser.layer({})),
-);
-
-export const policyLayer = (policy: SendPolicy): Layer.Layer<SendPolicyService> =>
-  Layer.succeed(SendPolicyService)(SendPolicyService.layer(policy));
-
-export const defaultPolicyLayer = policyLayer(defaultSendPolicy);
 
 export class TestEmailInspection extends Context.Service<
   TestEmailInspection,
@@ -580,8 +690,6 @@ export class TestEmailInspection extends Context.Service<
   };
 }
 
-export type TestEmailInspectionShape = typeof TestEmailInspection.Service;
-
 export class TestEmailAdapter extends Context.Service<
   TestEmailAdapter,
   {
@@ -595,49 +703,68 @@ export class TestEmailAdapter extends Context.Service<
       send: (message) =>
         config.policy.validate(message).pipe(
           Effect.tap((accepted) => config.inspection.record(accepted)),
-          Effect.as({ provider: "test", messageId: "test-message" } satisfies SendReceipt),
+          Effect.as({ provider: "test", messageId: "test-message-id" } satisfies SendReceipt),
         ),
     });
   };
 }
 
-const testInspectionLayer = Layer.effect(TestEmailInspection)(
+const testInspectionLayer = Layer.effect(
+  TestEmailInspection,
   Ref.make<readonly EmailMessage[]>([]).pipe(
     Effect.map((state) => TestEmailInspection.layer({ state })),
   ),
 );
 
-const testEmailAdapterLayer = Layer.effect(TestEmailAdapter)(
+const testEmailAdapterLayer = Layer.effect(
+  TestEmailAdapter,
   Effect.gen(function* () {
+    const policy = yield* SendPolicy;
     const inspection = yield* TestEmailInspection;
-    const policy = yield* SendPolicyService;
-    return TestEmailAdapter.layer({ inspection, policy });
+    return TestEmailAdapter.layer({ policy, inspection });
   }),
 );
 
-const testEmailLayer = Layer.effect(Email)(
+const testEmailLayer = Layer.effect(
+  Email,
   Effect.gen(function* () {
     const adapter = yield* TestEmailAdapter;
-    return Email.layer({ send: adapter.send });
+    return Email.layer(adapter);
   }),
 ).pipe(Layer.provideMerge(testEmailAdapterLayer));
 
-export const testLayer: Layer.Layer<Email | TestEmailInspection, never, SendPolicyService> =
+export const testPolicyConfig: typeof SendPolicyConfigInput.Type = SendPolicy.defaultConfig;
+export const testPolicyLayer: Layer.Layer<SendPolicy> = Layer.succeed(
+  SendPolicy,
+  SendPolicy.layer(testPolicyConfig),
+);
+export const testLayer: Layer.Layer<Email | TestEmailInspection, never, SendPolicy> =
   testEmailLayer.pipe(Layer.provideMerge(testInspectionLayer));
+export const defaultTestLayer: Layer.Layer<Email | TestEmailInspection | SendPolicy> =
+  testLayer.pipe(Layer.provideMerge(testPolicyLayer));
 
-export const defaultTestLayer: Layer.Layer<Email | TestEmailInspection | SendPolicyService> =
-  testLayer.pipe(Layer.provideMerge(defaultPolicyLayer));
+export const ResendConfigInput = Schema.Struct({
+  apiKey: Schema.Redacted(Schema.String),
+});
 
 export interface ResendConfig {
   readonly apiKey: Redacted.Redacted<string>;
 }
 
-export const resendConfig: Config.Config<ResendConfig> = Config.map(
+export const resendConfig: Config.Config<typeof ResendConfigInput.Type> = Config.map(
   Config.nonEmptyString("RESEND_API_KEY"),
-  (apiKey) => ({
-    apiKey: Redacted.make(apiKey),
-  }),
+  (apiKey) => ({ apiKey: Redacted.make(apiKey) }),
 );
+
+export const makeResendConfig = (apiKey: string): ResendConfig =>
+  ResendConfigInput.make({
+    apiKey: Redacted.make(apiKey),
+  });
+
+const formatAddress = (mailbox: Mailbox): string =>
+  mailbox.displayName === undefined
+    ? mailbox.address
+    : `${mailbox.displayName} <${mailbox.address}>`;
 
 export const unsafeFormatMailboxForAdapter = formatAddress;
 export const unsafeRedactedValueForAdapter = Redacted.value;

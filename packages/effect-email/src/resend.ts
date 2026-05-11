@@ -13,83 +13,65 @@ import {
   ProviderProtocolFailure,
   RateLimitFailure,
   RejectedMessageFailure,
-  type ResendConfig,
-  resendConfig,
+  ResendConfigInput,
   type SendFailure,
-  type SendPolicyServiceShape,
+  SendPolicy,
   type SendReceipt,
-  SendPolicyService,
   TransportUnavailableFailure,
-  defaultPolicyLayer,
+  makeResendConfig,
+  resendConfig,
   unsafeFormatMailboxForAdapter,
   unsafeRedactedValueForAdapter,
 } from "./index";
 
-export type { ResendConfig };
+export { ResendConfigInput };
 export { resendConfig as config };
+
+const HttpClientInstance = Schema.declare<HttpClient.HttpClient>(
+  (input): input is HttpClient.HttpClient =>
+    typeof input === "object" && input !== null && Object.hasOwn(input, "execute"),
+);
+
+const ResendConfigInstance = Schema.declare<typeof ResendConfig.Service>(
+  (input): input is typeof ResendConfig.Service =>
+    typeof input === "object" && input !== null && Object.hasOwn(input, "apiKey"),
+);
+
+const ResendClientInput = Schema.Struct({
+  client: HttpClientInstance,
+  resend: ResendConfigInstance,
+});
 
 const ResendSuccess = Schema.Struct({ id: Schema.String });
 const decodeResendSuccess = Schema.decodeUnknownEffect(ResendSuccess);
 
-export const ResendAdapterInput = Schema.Struct({
-  apiKey: Schema.Redacted(Schema.String),
-  client: Schema.declare<HttpClient.HttpClient>(
-    (input): input is HttpClient.HttpClient =>
-      typeof input === "object" && input !== null && Object.hasOwn(input, "execute"),
-  ),
-  policy: Schema.declare<SendPolicyServiceShape>(
-    (input): input is SendPolicyServiceShape =>
-      typeof input === "object" && input !== null && Object.hasOwn(input, "validate"),
-  ),
-});
+export class ResendConfig extends Context.Service<
+  ResendConfig,
+  {
+    readonly apiKey: Redacted.Redacted<string>;
+  }
+>()("ResendConfig") {
+  static readonly layer = (input: typeof ResendConfigInput.Type) =>
+    Layer.succeed(ResendConfig)(ResendConfigInput.make(input));
+}
 
-export class ResendAdapter extends Context.Service<
-  ResendAdapter,
+export const makeConfig = makeResendConfig;
+
+export class ResendClient extends Context.Service<
+  ResendClient,
   {
     readonly send: (message: EmailMessage) => Effect.Effect<SendReceipt, SendFailure>;
   }
->()("ResendAdapter") {
-  static readonly layer = (input: typeof ResendAdapterInput.Type) => {
-    const config = ResendAdapterInput.make(input);
-    return ResendAdapter.of({
+>()("ResendClient") {
+  static readonly layer = (input: typeof ResendClientInput.Type) => {
+    const config = ResendClientInput.make(input);
+    return ResendClient.of({
       ...config,
       send: (message) =>
-        config.policy.validate(message).pipe(
-          Effect.flatMap((accepted) =>
-            HttpClientRequest.post("https://api.resend.com/emails").pipe(
-              HttpClientRequest.bearerToken(unsafeRedactedValueForAdapter(config.apiKey)),
-              HttpClientRequest.acceptJson,
-              HttpClientRequest.bodyJson(requestBody(accepted)),
-              Effect.flatMap(config.client.execute),
-              Effect.mapError(
-                () =>
-                  new TransportUnavailableFailure({
-                    provider: "resend",
-                    retryable: true,
-                  }),
-              ),
-            ),
-          ),
-          Effect.flatMap((response) =>
-            response.status >= 200 && response.status < 300
-              ? HttpClientResponse.schemaBodyJson(ResendSuccess)(response).pipe(
-                  Effect.flatMap(decodeResendSuccess),
-                  Effect.map(
-                    (body): SendReceipt => ({
-                      provider: "resend",
-                      messageId: body.id,
-                    }),
-                  ),
-                  Effect.mapError(
-                    () =>
-                      new ProviderProtocolFailure({
-                        provider: "resend",
-                        retryable: false,
-                      }),
-                  ),
-                )
-              : Effect.fail(classifyStatus(response.status)),
-          ),
+        executeResendSend(
+          config.client,
+          unsafeRedactedValueForAdapter(config.resend.apiKey),
+          message,
         ),
     });
   };
@@ -140,49 +122,79 @@ const classifyStatus = (status: number): SendFailure => {
   return new ProviderProtocolFailure({ provider: "resend", retryable: false });
 };
 
-const emailFromResendLayer = Layer.effect(Email)(
-  Effect.gen(function* () {
-    const adapter = yield* ResendAdapter;
-    return Email.layer({ send: adapter.send });
-  }),
-);
-
-export const layer = (
-  resend: ResendConfig,
-): Layer.Layer<Email | ResendAdapter, never, HttpClient.HttpClient | SendPolicyService> => {
-  const resendLayer = Layer.effect(ResendAdapter)(
-    Effect.gen(function* () {
-      const client = yield* HttpClient.HttpClient;
-      const policy = yield* SendPolicyService;
-      return ResendAdapter.layer({ ...resend, client, policy });
-    }),
-  );
-
-  return emailFromResendLayer.pipe(Layer.provideMerge(resendLayer));
-};
-
-export const defaultPolicyLayerFor = (
-  resend: ResendConfig,
-): Layer.Layer<Email | ResendAdapter | SendPolicyService, never, HttpClient.HttpClient> =>
-  layer(resend).pipe(Layer.provideMerge(defaultPolicyLayer));
-
-export const defaultLayer: Layer.Layer<Email | ResendAdapter, Config.ConfigError> =
-  emailFromResendLayer.pipe(
-    Layer.provideMerge(
-      Layer.effect(ResendAdapter)(
-        resendConfig.asEffect().pipe(
-          Effect.flatMap((resend) =>
-            Effect.gen(function* () {
-              const client = yield* HttpClient.HttpClient;
-              const policy = yield* SendPolicyService;
-              return ResendAdapter.layer({ ...resend, client, policy });
-            }),
-          ),
-        ),
-      ).pipe(Layer.provideMerge(defaultPolicyLayer), Layer.provide(FetchHttpClient.layer)),
+const executeResendSend = (
+  client: HttpClient.HttpClient,
+  token: string,
+  message: EmailMessage,
+): Effect.Effect<SendReceipt, SendFailure> =>
+  HttpClientRequest.post("https://api.resend.com/emails").pipe(
+    HttpClientRequest.bearerToken(token),
+    HttpClientRequest.acceptJson,
+    HttpClientRequest.bodyJson(requestBody(message)),
+    Effect.flatMap(client.execute),
+    Effect.mapError(
+      () =>
+        new TransportUnavailableFailure({
+          provider: "resend",
+          retryable: true,
+        }),
+    ),
+    Effect.flatMap((response) =>
+      response.status >= 200 && response.status < 300
+        ? HttpClientResponse.schemaBodyJson(ResendSuccess)(response).pipe(
+            Effect.flatMap(decodeResendSuccess),
+            Effect.map(
+              (body): SendReceipt => ({
+                provider: "resend",
+                messageId: body.id,
+              }),
+            ),
+            Effect.mapError(
+              () =>
+                new ProviderProtocolFailure({
+                  provider: "resend",
+                  retryable: false,
+                }),
+            ),
+          )
+        : Effect.fail(classifyStatus(response.status)),
     ),
   );
 
-export const makeConfig = (apiKey: string): ResendConfig => ({
-  apiKey: Redacted.make(apiKey),
-});
+export const policyConfig: typeof SendPolicy.defaultConfig = SendPolicy.defaultConfig;
+
+export const policyLayer: Layer.Layer<SendPolicy> = Layer.succeed(
+  SendPolicy,
+  SendPolicy.layer(policyConfig),
+);
+
+export const clientLayer: Layer.Layer<ResendClient, Config.ConfigError, HttpClient.HttpClient> =
+  Layer.effect(
+    ResendClient,
+    Effect.gen(function* () {
+      const client = yield* HttpClient.HttpClient;
+      const resend = yield* ResendConfig;
+      return ResendClient.layer({ client, resend });
+    }),
+  ).pipe(
+    Layer.provide(
+      Layer.unwrap(resendConfig.asEffect().pipe(Effect.map((input) => ResendConfig.layer(input)))),
+    ),
+  );
+
+export const layer: Layer.Layer<Email, never, ResendClient | SendPolicy> = Layer.effect(
+  Email,
+  Effect.gen(function* () {
+    const resend = yield* ResendClient;
+    const policy = yield* SendPolicy;
+    return Email.layer({
+      send: (message) => policy.validate(message).pipe(Effect.flatMap(resend.send)),
+    });
+  }),
+);
+
+export const defaultLayer: Layer.Layer<Email, Config.ConfigError> = layer.pipe(
+  Layer.provide(policyLayer),
+  Layer.provide(clientLayer),
+  Layer.provide(FetchHttpClient.layer),
+);
