@@ -1,4 +1,4 @@
-import { Config, Context, Data, Effect, Layer, Option, Redacted, Ref, Schema } from "effect";
+import { Context, Data, Effect, Option, Schema } from "effect";
 
 export const EmailAddress = Schema.String.pipe(Schema.brand("EmailAddress"));
 export type EmailAddress = typeof EmailAddress.Type;
@@ -535,30 +535,6 @@ const htmlBodyBytes = MessageBody.$match({
   TextAndHtml: ({ html }) => utf8Bytes(html),
 });
 
-const TestEmailInspectionState = Schema.declare<Ref.Ref<readonly EmailMessage[]>>(
-  (input): input is Ref.Ref<readonly EmailMessage[]> =>
-    typeof input === "object" && input !== null && Object.hasOwn(input, "ref"),
-);
-
-const TestEmailInspectionInput = Schema.Struct({
-  state: TestEmailInspectionState,
-});
-
-const SendPolicyInstance = Schema.declare<typeof SendPolicy.Service>(
-  (input): input is typeof SendPolicy.Service =>
-    typeof input === "object" && input !== null && Object.hasOwn(input, "validate"),
-);
-
-const TestEmailInspectionInstance = Schema.declare<typeof TestEmailInspection.Service>(
-  (input): input is typeof TestEmailInspection.Service =>
-    typeof input === "object" && input !== null && Object.hasOwn(input, "record"),
-);
-
-const TestEmailAdapterInput = Schema.Struct({
-  inspection: TestEmailInspectionInstance,
-  policy: SendPolicyInstance,
-});
-
 export class SendPolicy extends Context.Service<
   SendPolicy,
   SendPolicyConfig & {
@@ -668,103 +644,3 @@ export class Email extends Context.Service<
     return Email.of({ ...config });
   };
 }
-
-export class TestEmailInspection extends Context.Service<
-  TestEmailInspection,
-  {
-    readonly sent: Effect.Effect<readonly EmailMessage[]>;
-    readonly takeSent: Effect.Effect<readonly EmailMessage[]>;
-    readonly clear: Effect.Effect<void>;
-    readonly record: (message: EmailMessage) => Effect.Effect<void>;
-  }
->()("TestEmailInspection") {
-  static readonly layer = (input: typeof TestEmailInspectionInput.Type) => {
-    const config = TestEmailInspectionInput.make(input);
-    return TestEmailInspection.of({
-      ...config,
-      sent: Ref.get(config.state),
-      takeSent: Ref.getAndSet(config.state, []),
-      clear: Ref.set(config.state, []),
-      record: (message) => Ref.update(config.state, (messages) => [...messages, message]),
-    });
-  };
-}
-
-export class TestEmailAdapter extends Context.Service<
-  TestEmailAdapter,
-  {
-    readonly send: (message: EmailMessage) => Effect.Effect<SendReceipt, SendFailure>;
-  }
->()("TestEmailAdapter") {
-  static readonly layer = (input: typeof TestEmailAdapterInput.Type) => {
-    const config = TestEmailAdapterInput.make(input);
-    return TestEmailAdapter.of({
-      ...config,
-      send: (message) =>
-        config.policy.validate(message).pipe(
-          Effect.tap((accepted) => config.inspection.record(accepted)),
-          Effect.as({ provider: "test", messageId: "test-message-id" } satisfies SendReceipt),
-        ),
-    });
-  };
-}
-
-const testInspectionLayer = Layer.effect(
-  TestEmailInspection,
-  Ref.make<readonly EmailMessage[]>([]).pipe(
-    Effect.map((state) => TestEmailInspection.layer({ state })),
-  ),
-);
-
-const testEmailAdapterLayer = Layer.effect(
-  TestEmailAdapter,
-  Effect.gen(function* () {
-    const policy = yield* SendPolicy;
-    const inspection = yield* TestEmailInspection;
-    return TestEmailAdapter.layer({ policy, inspection });
-  }),
-);
-
-const testEmailLayer = Layer.effect(
-  Email,
-  Effect.gen(function* () {
-    const adapter = yield* TestEmailAdapter;
-    return Email.layer(adapter);
-  }),
-).pipe(Layer.provideMerge(testEmailAdapterLayer));
-
-export const testPolicyConfig: typeof SendPolicyConfigInput.Type = SendPolicy.defaultConfig;
-export const testPolicyLayer: Layer.Layer<SendPolicy> = Layer.succeed(
-  SendPolicy,
-  SendPolicy.layer(testPolicyConfig),
-);
-export const testLayer: Layer.Layer<Email | TestEmailInspection, never, SendPolicy> =
-  testEmailLayer.pipe(Layer.provideMerge(testInspectionLayer));
-export const defaultTestLayer: Layer.Layer<Email | TestEmailInspection | SendPolicy> =
-  testLayer.pipe(Layer.provideMerge(testPolicyLayer));
-
-export const ResendConfigInput = Schema.Struct({
-  apiKey: Schema.Redacted(Schema.String),
-});
-
-export interface ResendConfig {
-  readonly apiKey: Redacted.Redacted<string>;
-}
-
-export const resendConfig: Config.Config<typeof ResendConfigInput.Type> = Config.map(
-  Config.nonEmptyString("RESEND_API_KEY"),
-  (apiKey) => ({ apiKey: Redacted.make(apiKey) }),
-);
-
-export const makeResendConfig = (apiKey: string): ResendConfig =>
-  ResendConfigInput.make({
-    apiKey: Redacted.make(apiKey),
-  });
-
-const formatAddress = (mailbox: Mailbox): string =>
-  mailbox.displayName === undefined
-    ? mailbox.address
-    : `${mailbox.displayName} <${mailbox.address}>`;
-
-export const unsafeFormatMailboxForAdapter = formatAddress;
-export const unsafeRedactedValueForAdapter = Redacted.value;

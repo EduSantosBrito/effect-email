@@ -8,24 +8,30 @@ import {
 import {
   AuthenticationFailure,
   Email,
+  type Mailbox,
   type EmailMessage,
   MessageBody,
   ProviderProtocolFailure,
   RateLimitFailure,
   RejectedMessageFailure,
-  ResendConfigInput,
   type SendFailure,
   SendPolicy,
   type SendReceipt,
   TransportUnavailableFailure,
-  makeResendConfig,
-  resendConfig,
-  unsafeFormatMailboxForAdapter,
-  unsafeRedactedValueForAdapter,
 } from "./index";
 
-export { ResendConfigInput };
-export { resendConfig as config };
+export const ResendConfigInput = Schema.Struct({
+  apiKey: Schema.Redacted(Schema.String),
+});
+
+export interface ResendConfigShape {
+  readonly apiKey: Redacted.Redacted<string>;
+}
+
+export const config: Config.Config<typeof ResendConfigInput.Type> = Config.map(
+  Config.nonEmptyString("RESEND_API_KEY"),
+  (apiKey) => ({ apiKey: Redacted.make(apiKey) }),
+);
 
 const HttpClientInstance = Schema.declare<HttpClient.HttpClient>(
   (input): input is HttpClient.HttpClient =>
@@ -55,7 +61,8 @@ export class ResendConfig extends Context.Service<
     Layer.succeed(ResendConfig)(ResendConfigInput.make(input));
 }
 
-export const makeConfig = makeResendConfig;
+export const makeConfig = (apiKey: string): ResendConfigShape =>
+  ResendConfigInput.make({ apiKey: Redacted.make(apiKey) });
 
 export class ResendClient extends Context.Service<
   ResendClient,
@@ -70,7 +77,7 @@ export class ResendClient extends Context.Service<
       send: (message) =>
         executeResendSend(
           config.client,
-          unsafeRedactedValueForAdapter(config.resend.apiKey),
+          Redacted.value(config.resend.apiKey),
           message,
         ),
     });
@@ -85,14 +92,17 @@ const encodeBody = MessageBody.$match({
   TextAndHtml: ({ text, html }) => ({ text, html }),
 });
 
+const formatMailbox = (mailbox: Mailbox): string =>
+  mailbox.displayName === undefined
+    ? mailbox.address
+    : `${mailbox.displayName} <${mailbox.address}>`;
+
 const requestBody = (message: EmailMessage) => ({
-  from: unsafeFormatMailboxForAdapter(message.from),
-  to: message.to.map(unsafeFormatMailboxForAdapter),
-  ...(message.cc !== undefined ? { cc: message.cc.map(unsafeFormatMailboxForAdapter) } : {}),
-  ...(message.bcc !== undefined ? { bcc: message.bcc.map(unsafeFormatMailboxForAdapter) } : {}),
-  ...(message.replyTo !== undefined
-    ? { reply_to: message.replyTo.map(unsafeFormatMailboxForAdapter) }
-    : {}),
+  from: formatMailbox(message.from),
+  to: message.to.map(formatMailbox),
+  ...(message.cc !== undefined ? { cc: message.cc.map(formatMailbox) } : {}),
+  ...(message.bcc !== undefined ? { bcc: message.bcc.map(formatMailbox) } : {}),
+  ...(message.replyTo !== undefined ? { reply_to: message.replyTo.map(formatMailbox) } : {}),
   subject: message.subject,
   ...encodeBody(message.body),
   ...(message.attachments !== undefined
@@ -178,7 +188,7 @@ export const clientLayer: Layer.Layer<ResendClient, Config.ConfigError, HttpClie
     }),
   ).pipe(
     Layer.provide(
-      Layer.unwrap(resendConfig.asEffect().pipe(Effect.map((input) => ResendConfig.layer(input)))),
+      Layer.unwrap(config.asEffect().pipe(Effect.map((input) => ResendConfig.layer(input)))),
     ),
   );
 

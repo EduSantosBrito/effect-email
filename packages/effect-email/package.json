@@ -3,17 +3,10 @@
   "version": "0.2.0",
   "description": "TypeScript SDK for effect-email.",
   "files": [
-    "dist/index.js",
-    "dist/index.d.ts",
-    "dist/index.d.ts.map",
-    "dist/resend.js",
-    "dist/resend.d.ts",
-    "dist/resend.d.ts.map",
-    "dist/test.js",
-    "dist/test.d.ts",
-    "dist/test.d.ts.map"
+    "dist"
   ],
   "type": "module",
+  "sideEffects": false,
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -32,10 +25,11 @@
     }
   },
   "scripts": {
-    "build": "bun build ./src/index.ts ./src/resend.ts ./src/test.ts --outdir ./dist --target bun --format esm && tsgo --emitDeclarationOnly",
+    "build": "rm -rf dist && bun build ./src/index.ts ./src/resend.ts ./src/test.ts --outdir ./dist --target bun --format esm --packages external && tsgo --emitDeclarationOnly",
     "check": "bun --bun tsgo --noEmit && bun run lint",
     "format": "bun --bun oxfmt --write package.json tsconfig.json src",
     "format:check": "bun --bun oxfmt --check package.json tsconfig.json src",
+    "knip": "bunx knip",
     "lint": "bun --bun oxlint -c ../../.oxlintrc.json src",
     "test": "bun --bun vitest run src",
     "prepare": "bun --bun effect-tsgo patch"
@@ -44,14 +38,16 @@
     "effect": "^4.0.0-beta.64"
   },
   "devDependencies": {
-    "@effect/tsgo": "0.5.2",
-    "@effect/vitest": "4.0.0-beta.64",
-    "@types/bun": "latest",
-    "@typescript/native-preview": "latest",
-    "bun-types": "1.3.13",
-    "effect-rules": "0.1.0",
-    "oxfmt": "^0.48.0",
-    "oxlint": "^1.63.0",
-    "vitest": "^4.1.5"
+    "@effect/language-service": "catalog:",
+    "@effect/tsgo": "catalog:",
+    "@effect/vitest": "catalog:",
+    "@types/bun": "catalog:",
+    "@typescript/native-preview": "catalog:",
+    "bun-types": "catalog:",
+    "effect-rules": "catalog:",
+    "knip": "catalog:",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
+    "vitest": "catalog:"
   }
 }

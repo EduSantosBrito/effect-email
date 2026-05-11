@@ -1,0 +1,11 @@
+{
+  "$schema": "https://unpkg.com/knip@latest/schema.json",
+  "entry": ["test/public-api-imports.ts"],
+  "project": ["src/**/*.ts", "test/**/*.ts"],
+  "ignoreDependencies": [
+    "@effect/tsgo",
+    "effect-rules",
+    "oxfmt",
+    "oxlint"
+  ]
+}

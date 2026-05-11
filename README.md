@@ -1,22 +1,42 @@
 # effect-email
 
-Effect-first email SDK with provider-neutral core APIs, trusted-runtime Resend support, and an inspectable Test adapter.
+Effect-first email SDK with provider-neutral core APIs, trusted-runtime Resend support, and an inspectable test adapter.
 
 ## Install
+
+For an application consuming the package:
+
+```sh
+bun add effect-email effect
+```
+
+For this repository:
 
 ```sh
 bun install
 ```
 
-## Scripts
+## Examples
+
+- [Resend example](./examples/resend)
+- Test adapter example below
+
+## Setup
+
+Create a Resend API key and expose it as `RESEND_API_KEY` in the trusted runtime that sends email.
 
 ```sh
-bun run build
-bun run check
-bun run test
+RESEND_API_KEY=re_xxxx
 ```
 
-## Minimal Resend Send
+`effect-email/resend` reads `RESEND_API_KEY` through Effect Config. Keep this adapter out of browser bundles and any runtime where provider secrets can be exposed.
+
+> [!NOTE]
+> To send from your own domain, verify that domain in Resend first.
+
+## Usage
+
+Send your first email:
 
 ```ts
 import { Effect } from "effect";
@@ -28,23 +48,92 @@ const program = Effect.gen(function* () {
   const message = yield* EmailMessage.make({
     from: "Acme <onboarding@example.com>",
     to: "user@example.com",
-    subject: "Hello",
-    text: "World",
+    subject: "Hello from effect-email",
+    text: "Sent with Effect.",
   });
 
-  return yield* email.send(message);
+  const receipt = yield* email.send(message);
+
+  yield* Effect.logInfo(`sent ${receipt.provider}:${receipt.messageId}`);
 });
 
 await Effect.runPromise(program.pipe(Effect.provide(Resend.defaultLayer)));
 ```
 
-`effect-email/resend` is trusted-runtime only. Do not import provider-backed adapters into browser code or other runtimes where provider secrets can be exposed.
+## Send HTML
+
+Pass `html` for HTML-only email, or pass both `text` and `html` for a multipart body.
+
+```ts
+const message = yield* EmailMessage.make({
+  from: "Acme <onboarding@example.com>",
+  to: "user@example.com",
+  subject: "Welcome",
+  text: "Welcome to Acme.",
+  html: "<strong>Welcome to Acme.</strong>",
+});
+
+yield* email.send(message);
+```
+
+## Send Attachments
+
+Attachments are provider-neutral: pass a filename, media type, and bytes. The Resend adapter encodes them for the Resend API.
+
+```ts
+const message = yield* EmailMessage.make({
+  from: "Acme <onboarding@example.com>",
+  to: "user@example.com",
+  subject: "Invoice",
+  text: "Your invoice is attached.",
+  attachments: [
+    {
+      name: "invoice.txt",
+      mediaType: "text/plain",
+      content: new TextEncoder().encode("invoice #123"),
+    },
+  ],
+});
+
+yield* email.send(message);
+```
+
+## Test Adapter
+
+Use `effect-email/test` when application code should send email but tests need inspection instead of network I/O.
+
+```ts
+import { Effect } from "effect";
+import { Email, EmailMessage } from "effect-email";
+import * as TestEmail from "effect-email/test";
+
+const testProgram = Effect.gen(function* () {
+  const email = yield* Email;
+  const message = yield* EmailMessage.make({
+    from: "Acme <onboarding@example.com>",
+    to: "user@example.com",
+    subject: "Hello",
+    text: "World",
+  });
+
+  yield* email.send(message);
+
+  const inspection = yield* TestEmail.TestEmailInspection;
+  const sent = yield* inspection.takeSent;
+
+  return sent.length;
+});
+
+await Effect.runPromise(testProgram.pipe(Effect.provide(TestEmail.defaultLayer)));
+```
 
 ## Custom Policy
 
+Every adapter validates messages through `SendPolicy`. Override limits by providing your own policy layer.
+
 ```ts
-import { Effect, Layer } from "effect";
-import { Email, EmailMessage, SendPolicy } from "effect-email";
+import { Layer } from "effect";
+import { SendPolicy } from "effect-email";
 import * as Resend from "effect-email/resend";
 import { FetchHttpClient } from "effect/unstable/http";
 
@@ -61,42 +150,12 @@ const EmailLive = Resend.layer.pipe(
   ),
   Layer.provide(FetchHttpClient.layer),
 );
-
-const program = Effect.gen(function* () {
-  const email = yield* Email;
-  const message = yield* EmailMessage.make({
-    from: "Acme <onboarding@example.com>",
-    to: "user@example.com",
-    subject: "Hello",
-    text: "World",
-  });
-
-  return yield* email.send(message);
-});
-
-await Effect.runPromise(program.pipe(Effect.provide(EmailLive)));
 ```
 
-## Test Adapter
+## Development
 
-```ts
-import { Effect } from "effect";
-import { Email, EmailMessage } from "effect-email";
-import * as TestEmail from "effect-email/test";
-
-const assertEmail = Effect.gen(function* () {
-  const email = yield* Email;
-  const message = yield* EmailMessage.make({
-    from: "Acme <onboarding@example.com>",
-    to: "user@example.com",
-    subject: "Hello",
-    text: "World",
-  });
-
-  yield* email.send(message);
-
-  const inspection = yield* TestEmail.TestEmailInspection;
-  const sent = yield* inspection.takeSent;
-  return sent.length;
-}).pipe(Effect.provide(TestEmail.defaultLayer));
+```sh
+bun run build
+bun run check
+bun run test
 ```
