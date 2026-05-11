@@ -171,6 +171,8 @@ describe("effect-email constructors", () => {
         assert.strictEqual(messageFailure.reason, reason);
       }
 
+      yield* decodeEmailHeaderValue(" ").pipe(Effect.flip);
+
       const duplicateFailure = yield* makeMessage({
         headers: [
           { name: "X-Trace-ID", value: "one" },
