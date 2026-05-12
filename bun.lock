@@ -22,9 +22,21 @@
         "typescript": "catalog:",
       },
     },
+    "examples/smtp": {
+      "name": "effect-email-smtp-example",
+      "dependencies": {
+        "effect": "catalog:",
+        "effect-email": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "bun-types": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
     "packages/effect-email": {
       "name": "effect-email",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "dependencies": {
         "effect": "^4.0.0-beta.64",
         "nodemailer": "^8.0.7",
@@ -326,6 +338,8 @@
     "effect-email": ["effect-email@workspace:packages/effect-email"],
 
     "effect-email-resend-example": ["effect-email-resend-example@workspace:examples/resend"],
+
+    "effect-email-smtp-example": ["effect-email-smtp-example@workspace:examples/smtp"],
 
     "effect-rules": ["effect-rules@0.3.2", "", { "dependencies": { "@oxlint/plugins": "^1.63.0" } }, "sha512-LAcbAyZ95ytShq1cMOkmk9iZHrYtwSB3GpS16Yj+lboQkGII9jzg3LEVY36baQ9rwySE9anLNa+rHvqHUCu4SQ=="],
 

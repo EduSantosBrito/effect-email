@@ -1,6 +1,6 @@
 # effect-email
 
-Effect-first email SDK with provider-neutral core APIs, trusted-runtime Resend support, and an inspectable test adapter.
+Effect-first email SDK with provider-neutral core APIs, trusted-runtime Resend and SMTP support, and an inspectable test adapter.
 
 ## Install
 
@@ -19,11 +19,12 @@ bun install
 ## Examples
 
 - [Resend example](https://github.com/EduSantosBrito/effect-email/tree/main/examples/resend)
+- [SMTP example](https://github.com/EduSantosBrito/effect-email/tree/main/examples/smtp)
 - Test adapter example below
 
 ## Setup
 
-Create a Resend API key and expose it as `RESEND_API_KEY` in the trusted runtime that sends email.
+For Resend, create an API key and expose it as `RESEND_API_KEY` in the trusted runtime that sends email.
 
 ```sh
 RESEND_API_KEY=re_xxxx
@@ -33,6 +34,18 @@ RESEND_API_KEY=re_xxxx
 
 > [!NOTE]
 > To send from your own domain, verify that domain in Resend first.
+
+For SMTP, expose host, port, secure mode, username, and password in the trusted runtime.
+
+```sh
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=user
+SMTP_PASSWORD=secret
+```
+
+`effect-email/smtp` reads these values through Effect Config. `SMTP_PASSWORD` is stored as a redacted Effect value. `SMTP_SECURE=true` means implicit TLS on connect; `SMTP_SECURE=false` still allows Nodemailer to use STARTTLS when the server supports it.
 
 ## Usage
 
@@ -59,6 +72,32 @@ const program = Effect.gen(function* () {
 
 await Effect.runPromise(program.pipe(Effect.provide(Resend.defaultLayer)));
 ```
+
+To send the same provider-neutral message through SMTP, provide the SMTP layer instead.
+
+```ts
+import { Effect } from "effect";
+import { Email, EmailMessage } from "effect-email";
+import * as Smtp from "effect-email/smtp";
+
+const program = Effect.gen(function* () {
+  const email = yield* Email;
+  const message = yield* EmailMessage.make({
+    from: "Acme <onboarding@example.com>",
+    to: "user@example.com",
+    subject: "Hello over SMTP",
+    text: "Sent with effect-email/smtp.",
+  });
+
+  const receipt = yield* email.send(message);
+
+  yield* Effect.logInfo(`accepted ${receipt.provider}:${receipt.messageId}`);
+});
+
+await Effect.runPromise(program.pipe(Effect.provide(Smtp.defaultLayer)));
+```
+
+SMTP receipts report provider acceptance only. The SMTP message ID is useful for tracing an accepted send, but it is not proof that a recipient inbox received the email and it is not a duplicate-send prevention key.
 
 ## Send HTML
 

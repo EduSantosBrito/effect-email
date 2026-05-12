@@ -33,3 +33,6 @@ jobs:
 
       - name: Test
         run: bun run test
+
+      - name: Package smoke
+        run: bun run package:smoke
