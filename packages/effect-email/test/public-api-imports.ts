@@ -72,6 +72,20 @@ import {
   type ResendConfigShape,
 } from "effect-email/resend";
 import {
+  SmtpClient,
+  SmtpConfig,
+  SmtpConfigInput,
+  clientLayer as smtpClientLayer,
+  config as smtpConfig,
+  defaultLayer as smtpDefaultLayer,
+  layer as smtpLayer,
+  makeConfig as makeSmtpConfig,
+  policyConfig as smtpPolicyConfig,
+  policyLayer as smtpPolicyLayer,
+  type SmtpConfigInput as SmtpConfigInputShape,
+  type SmtpConfigShape,
+} from "effect-email/smtp";
+import {
   TestEmailAdapter,
   TestEmailInspection,
   defaultLayer as testDefaultLayer,
@@ -152,6 +166,19 @@ type PublicApiContract = {
     | typeof policyLayer
     | ResendConfigInput
     | ResendConfigShape;
+  readonly smtp:
+    | typeof SmtpClient
+    | typeof SmtpConfig
+    | typeof SmtpConfigInput
+    | typeof smtpClientLayer
+    | typeof smtpConfig
+    | typeof smtpDefaultLayer
+    | typeof smtpLayer
+    | typeof makeSmtpConfig
+    | typeof smtpPolicyConfig
+    | typeof smtpPolicyLayer
+    | SmtpConfigInputShape
+    | SmtpConfigShape;
   readonly test:
     | typeof TestEmailAdapter
     | typeof TestEmailInspection

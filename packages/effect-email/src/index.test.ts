@@ -26,6 +26,7 @@ import {
 } from "./index";
 import { requestBody } from "./internal/resend-request";
 import * as Resend from "./resend";
+import * as Smtp from "./smtp";
 import * as TestEmail from "./test";
 
 const makeMessage = (input: Partial<EmailMessageInput> = {}) =>
@@ -89,6 +90,15 @@ const provideResend = (
     ),
     Layer.provide(Resend.ResendConfig.layer({ apiKey: Redacted.make("secret") })),
     Layer.provide(Layer.succeed(HttpClient.HttpClient)(client)),
+    Layer.provide(policy),
+  );
+
+const provideSmtp = (
+  transporter: Parameters<typeof Smtp.SmtpClient.layer>[0]["transporter"],
+  policy: Layer.Layer<SendPolicy> = Layer.succeed(SendPolicy)(SendPolicy.defaultLayer),
+): Layer.Layer<Email> =>
+  Smtp.layer.pipe(
+    Layer.provide(Layer.succeed(Smtp.SmtpClient)(Smtp.SmtpClient.layer({ transporter }))),
     Layer.provide(policy),
   );
 
@@ -732,6 +742,123 @@ describe("effect-email Resend adapter", () => {
         return yield* Resend.ResendConfig;
       }).pipe(Effect.provide(Resend.ResendConfig.layer({ apiKey: Redacted.make("secret") })));
       assert.deepStrictEqual(config.apiKey, Redacted.make("secret"));
+    }),
+  );
+});
+
+describe("effect-email SMTP adapter", () => {
+  it.effect("sends text messages and decodes SMTP receipts", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0);
+      const seen = yield* Ref.make<unknown>(undefined);
+      const transporter = {
+        sendMail: (options: unknown) =>
+          Ref.update(attempts, (n) => n + 1).pipe(
+            Effect.tap(() => Ref.set(seen, options)),
+            Effect.as({ messageId: "<smtp-id@example.com>" }),
+            Effect.runPromise,
+          ),
+      };
+      const message = yield* makeMessage();
+
+      const receipt = yield* Effect.gen(function* () {
+        const email = yield* Email;
+        return yield* email.send(message);
+      }).pipe(Effect.provide(provideSmtp(transporter)));
+
+      assert.deepStrictEqual(receipt, { provider: "smtp", messageId: "<smtp-id@example.com>" });
+      assert.strictEqual(yield* Ref.get(attempts), 1);
+      assert.deepStrictEqual(yield* Ref.get(seen), {
+        from: "Sender <sender@example.com>",
+        to: ["you@example.com"],
+        subject: "Hello",
+        text: "Plain",
+      });
+    }),
+  );
+
+  it.effect("enforces policy before invoking SmtpClient", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0);
+      const transporter = {
+        sendMail: () =>
+          Ref.update(attempts, (n) => n + 1).pipe(
+            Effect.as({ messageId: "<smtp-id@example.com>" }),
+            Effect.runPromise,
+          ),
+      };
+      const message = yield* makeMessage({ to: ["one@example.com", "two@example.com"] });
+      const failure = yield* Effect.gen(function* () {
+        const email = yield* Email;
+        return yield* email.send(message);
+      }).pipe(
+        Effect.provide(
+          provideSmtp(
+            transporter,
+            Layer.succeed(SendPolicy)(SendPolicy.layer({ maxRecipients: 1 })),
+          ),
+        ),
+        Effect.flip,
+      );
+
+      assert.ok(Predicate.isTagged(failure, "SendPolicyViolation"));
+      assert.strictEqual(yield* Ref.get(attempts), 0);
+    }),
+  );
+
+  it.effect("builds redacted SMTP config", () =>
+    Effect.gen(function* () {
+      const config = yield* Effect.gen(function* () {
+        return yield* Smtp.SmtpConfig;
+      }).pipe(
+        Effect.provide(
+          Smtp.SmtpConfig.layer({
+            host: "smtp.example.com",
+            port: 587,
+            secure: false,
+            user: "user",
+            password: Redacted.make("secret"),
+          }),
+        ),
+      );
+      assert.deepStrictEqual(config.password, Redacted.make("secret"));
+      assert.deepStrictEqual(
+        Smtp.makeConfig({
+          host: "smtp.example.com",
+          port: 465,
+          secure: true,
+          user: "user",
+          password: "secret",
+        }),
+        {
+          host: "smtp.example.com",
+          port: 465,
+          secure: true,
+          user: "user",
+          password: Redacted.make("secret"),
+        },
+      );
+    }),
+  );
+
+  it.effect("builds SmtpClient from a caller-provided SmtpConfig layer", () =>
+    Effect.gen(function* () {
+      const client = yield* Effect.gen(function* () {
+        return yield* Smtp.SmtpClient;
+      }).pipe(
+        Effect.provide(Smtp.clientLayer),
+        Effect.provide(
+          Smtp.SmtpConfig.layer({
+            host: "localhost",
+            port: 1025,
+            secure: false,
+            user: "user",
+            password: Redacted.make("secret"),
+          }),
+        ),
+      );
+
+      assert.strictEqual(typeof client.send, "function");
     }),
   );
 });
