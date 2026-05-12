@@ -6,6 +6,7 @@ import {
   Email,
   EmailAddress,
   EmailHeader,
+  EmailHeaders,
   EmailHeaderInput,
   EmailHeaderName,
   EmailHeaderValidationFailure,
@@ -27,7 +28,10 @@ import {
   SendPolicy,
   SendPolicyConfigInput,
   SendPolicyViolation,
+  HtmlBody,
   TransportUnavailableFailure,
+  Subject,
+  TextBody,
   type Attachment as AttachmentShape,
   type AttachmentInput as AttachmentInputShape,
   type DisplayName as DisplayNameShape,
@@ -35,10 +39,12 @@ import {
   type EmailHeader as EmailHeaderShape,
   type EmailHeaderInput as EmailHeaderInputShape,
   type EmailHeaderName as EmailHeaderNameShape,
+  type EmailHeaders as EmailHeadersShape,
   type EmailHeadersRecordInput as EmailHeadersRecordInputShape,
   type EmailHeaderValue as EmailHeaderValueShape,
   type EmailMessage as EmailMessageShape,
   type EmailMessageInput as EmailMessageInputShape,
+  type HtmlBody as HtmlBodyShape,
   type EmailSend,
   type Mailbox as MailboxShape,
   type MailboxInput as MailboxInputShape,
@@ -48,6 +54,8 @@ import {
   type SendFailure,
   type SendPolicyConfig,
   type SendReceipt,
+  type Subject as SubjectShape,
+  type TextBody as TextBodyShape,
 } from "effect-email";
 import {
   ResendClient,
@@ -80,6 +88,7 @@ type PublicApiContract = {
     | typeof Email
     | typeof EmailAddress
     | typeof EmailHeader
+    | typeof EmailHeaders
     | typeof EmailHeaderInput
     | typeof EmailHeaderName
     | typeof EmailHeaderValidationFailure
@@ -101,7 +110,10 @@ type PublicApiContract = {
     | typeof SendPolicy
     | typeof SendPolicyConfigInput
     | typeof SendPolicyViolation
+    | typeof HtmlBody
     | typeof TransportUnavailableFailure
+    | typeof Subject
+    | typeof TextBody
     | AttachmentShape
     | AttachmentInputShape
     | DisplayNameShape
@@ -109,10 +121,12 @@ type PublicApiContract = {
     | EmailHeaderShape
     | EmailHeaderInputShape
     | EmailHeaderNameShape
+    | EmailHeadersShape
     | EmailHeadersRecordInputShape
     | EmailHeaderValueShape
     | EmailMessageShape
     | EmailMessageInputShape
+    | HtmlBodyShape
     | EmailSend
     | MailboxShape
     | MailboxInputShape
@@ -121,7 +135,9 @@ type PublicApiContract = {
     | MessageBodyInputShape
     | SendFailure
     | SendPolicyConfig
-    | SendReceipt;
+    | SendReceipt
+    | SubjectShape
+    | TextBodyShape;
   readonly resend:
     | typeof ResendClient
     | typeof ResendConfig
@@ -141,6 +157,15 @@ type PublicApiContract = {
     | typeof testLayer
     | typeof testPolicyConfig
     | typeof testPolicyLayer;
+};
+
+// @ts-expect-error EmailMessage is constructor-only; callers must use EmailMessage.make.
+const objectLiteralEmailMessage: EmailMessageShape = {
+  messageType: "EmailMessage",
+  from: undefined as never,
+  to: undefined as never,
+  subject: undefined as never,
+  body: undefined as never,
 };
 
 export type { PublicApiContract };

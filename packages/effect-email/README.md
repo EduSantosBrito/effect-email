@@ -36,7 +36,7 @@ RESEND_API_KEY=re_xxxx
 
 ## Usage
 
-Send your first email:
+Send your first email. Messages are constructor-only: pass raw caller input to `EmailMessage.make`, then send the returned trusted message.
 
 ```ts
 import { Effect } from "effect";
@@ -118,7 +118,7 @@ const message = yield* EmailMessage.make({
 });
 ```
 
-Use an ordered list when order, casing, or spacing matters. Header names are trimmed and casing is preserved. Header values are preserved exactly, except blank, multiline, and control-character values are rejected.
+Use an ordered list when order, casing, or spacing matters. Header names are trimmed and casing is preserved. Header values are preserved exactly, except blank, multiline, and control-character values are rejected. Parsed messages store headers as an `EmailHeaders` collection; use `EmailHeaders.toReadonlyArray(message.headers)` when test or adapter code needs ordered inspection.
 
 ```ts
 const message = yield* EmailMessage.make({
@@ -168,7 +168,7 @@ describe("email", () => {
 
 ## Custom Policy
 
-Every adapter validates messages through `SendPolicy`. Override limits by providing your own policy layer.
+Every adapter validates messages once through `SendPolicy` before provider/test adapter internals run. Override limits by providing your own policy layer. Limits must be positive finite integers; invalid limits fail at policy construction instead of at send time.
 
 ```ts
 import { Layer } from "effect";

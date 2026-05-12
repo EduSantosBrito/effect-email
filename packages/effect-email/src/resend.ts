@@ -159,9 +159,7 @@ export const layer: Layer.Layer<Email, never, ResendClient | SendPolicy> = Layer
   Effect.gen(function* () {
     const resend = yield* ResendClient;
     const policy = yield* SendPolicy;
-    return Email.layer({
-      send: (message) => policy.validate(message).pipe(Effect.flatMap(resend.send)),
-    });
+    return Email.layer({ policy, send: resend.send });
   }).pipe(Effect.annotateLogs({ service: "@effect-email/Email" })),
 );
 
