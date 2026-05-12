@@ -316,6 +316,64 @@ describe("effect-email constructors", () => {
       }
     }),
   );
+
+  it.effect("rejects duplicate inline attachment content IDs", () =>
+    Effect.gen(function* () {
+      const duplicateFailure = yield* makeMessage({
+        attachments: [
+          {
+            name: "logo.png",
+            mediaType: "image/png",
+            content: new Uint8Array([1]),
+            contentId: "asset@example.com",
+          },
+          {
+            name: "chart.png",
+            mediaType: "image/png",
+            content: new Uint8Array([2]),
+            contentId: "asset@example.com",
+          },
+        ],
+      }).pipe(Effect.flip);
+      assert.strictEqual(duplicateFailure.field, "attachments");
+      assert.strictEqual(duplicateFailure.reason, "DuplicateContentId");
+
+      const distinct = yield* makeMessage({
+        attachments: [
+          {
+            name: "logo.png",
+            mediaType: "image/png",
+            content: new Uint8Array([1]),
+            contentId: "logo@example.com",
+          },
+          {
+            name: "chart.png",
+            mediaType: "image/png",
+            content: new Uint8Array([2]),
+            contentId: "chart@example.com",
+          },
+        ],
+      });
+      assert.strictEqual(distinct.attachments?.[0]?.contentId, "logo@example.com");
+      assert.strictEqual(distinct.attachments?.[1]?.contentId, "chart@example.com");
+
+      const withoutContentIds = yield* makeMessage({
+        attachments: [
+          {
+            name: "logo.png",
+            mediaType: "image/png",
+            content: new Uint8Array([1]),
+          },
+          {
+            name: "chart.png",
+            mediaType: "image/png",
+            content: new Uint8Array([2]),
+          },
+        ],
+      });
+      assert.strictEqual(withoutContentIds.attachments?.length, 2);
+    }),
+  );
 });
 
 describe("effect-email policy and test adapter", () => {
