@@ -42,7 +42,6 @@ import {
   type EmailHeaders as EmailHeadersShape,
   type EmailHeadersRecordInput as EmailHeadersRecordInputShape,
   type EmailHeaderValue as EmailHeaderValueShape,
-  type EmailMessage as EmailMessageShape,
   type EmailMessageInput as EmailMessageInputShape,
   type HtmlBody as HtmlBodyShape,
   type EmailSend,
@@ -124,7 +123,6 @@ type PublicApiContract = {
     | EmailHeadersShape
     | EmailHeadersRecordInputShape
     | EmailHeaderValueShape
-    | EmailMessageShape
     | EmailMessageInputShape
     | HtmlBodyShape
     | EmailSend
@@ -157,15 +155,6 @@ type PublicApiContract = {
     | typeof testLayer
     | typeof testPolicyConfig
     | typeof testPolicyLayer;
-};
-
-// @ts-expect-error EmailMessage is constructor-only; callers must use EmailMessage.make.
-const objectLiteralEmailMessage: EmailMessageShape = {
-  messageType: "EmailMessage",
-  from: undefined as never,
-  to: undefined as never,
-  subject: undefined as never,
-  body: undefined as never,
 };
 
 export type { PublicApiContract };
