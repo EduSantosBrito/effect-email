@@ -861,4 +861,61 @@ describe("effect-email SMTP adapter", () => {
       assert.strictEqual(typeof client.send, "function");
     }),
   );
+
+  it.effect("maps HTML, multipart, recipients, and headers through SMTP send", () =>
+    Effect.gen(function* () {
+      const seen = yield* Ref.make<readonly unknown[]>([]);
+      const transporter = {
+        sendMail: (options: unknown) =>
+          Ref.update(seen, (messages) => [...messages, options]).pipe(
+            Effect.as({ messageId: "<smtp-id@example.com>" }),
+            Effect.runPromise,
+          ),
+      };
+
+      const htmlOnly = yield* makeMessage({
+        text: undefined,
+        html: "<strong>Plain</strong>",
+      });
+      const multipart = yield* makeMessage({
+        cc: "cc@example.com",
+        bcc: "bcc@example.com",
+        replyTo: "reply@example.com",
+        html: "<strong>Plain</strong>",
+        headers: [
+          { name: "X-Trace-ID", value: "  keep spacing  " },
+          { name: "X-Campaign-ID", value: "spring-2026" },
+        ],
+      });
+
+      yield* Effect.gen(function* () {
+        const email = yield* Email;
+        yield* email.send(htmlOnly);
+        yield* email.send(multipart);
+      }).pipe(Effect.provide(provideSmtp(transporter)));
+
+      assert.deepStrictEqual(yield* Ref.get(seen), [
+        {
+          from: "Sender <sender@example.com>",
+          to: ["you@example.com"],
+          subject: "Hello",
+          html: "<strong>Plain</strong>",
+        },
+        {
+          from: "Sender <sender@example.com>",
+          to: ["you@example.com"],
+          cc: ["cc@example.com"],
+          bcc: ["bcc@example.com"],
+          replyTo: ["reply@example.com"],
+          subject: "Hello",
+          text: "Plain",
+          html: "<strong>Plain</strong>",
+          headers: {
+            "X-Trace-ID": "  keep spacing  ",
+            "X-Campaign-ID": "spring-2026",
+          },
+        },
+      ]);
+    }),
+  );
 });
