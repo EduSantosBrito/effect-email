@@ -301,6 +301,7 @@ export class EmailMessageValidationFailure extends Schema.TaggedErrorClass<Email
       "InvalidMediaType",
       "InvalidAttachmentContent",
       "InvalidContentId",
+      "DuplicateContentId",
       "InvalidHeaderName",
       "ForbiddenHeaderName",
       "DuplicateHeaderName",
@@ -944,6 +945,18 @@ const parseEmailMessage: (
       return yield* new EmailMessageValidationFailure({
         field: duplicateRecipient.value.field,
         reason: "DuplicateRecipient",
+      });
+    }
+    const duplicateContentId = firstDuplicateBy(
+      Option.getOrElse(Option.fromUndefinedOr(attachments), () => []).filter(
+        (attachment) => attachment.contentId !== undefined,
+      ),
+      (attachment) => attachment.contentId ?? "",
+    );
+    if (Option.isSome(duplicateContentId)) {
+      return yield* new EmailMessageValidationFailure({
+        field: "attachments",
+        reason: "DuplicateContentId",
       });
     }
     const message = encodeEmailMessage({
