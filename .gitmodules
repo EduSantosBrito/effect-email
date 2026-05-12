@@ -13,3 +13,6 @@
 [submodule "opencode"]
 	path = .repos/opencode
 	url = https://github.com/anomalyco/opencode
+[submodule ".repos/emailjs"]
+	path = .repos/emailjs
+	url = git@github.com:eleith/emailjs.git
