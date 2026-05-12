@@ -975,4 +975,49 @@ describe("effect-email SMTP adapter", () => {
       ]);
     }),
   );
+
+  it.effect("classifies SMTP failures through send", () =>
+    Effect.gen(function* () {
+      const message = yield* makeMessage();
+      const cases: ReadonlyArray<readonly [unknown, string, boolean]> = [
+        [{ code: "EAUTH" }, "AuthenticationFailure", false],
+        [{ responseCode: 535 }, "AuthenticationFailure", false],
+        [{ responseCode: 450 }, "RejectedMessageFailure", false],
+        [{ responseCode: 550 }, "RejectedMessageFailure", false],
+        [{ code: "ETIMEDOUT" }, "TransportUnavailableFailure", true],
+        [{ code: "ESOCKET" }, "TransportUnavailableFailure", true],
+        [{ code: "ECONNECTION" }, "TransportUnavailableFailure", true],
+        [{ code: "ETLS" }, "TransportUnavailableFailure", true],
+      ];
+
+      for (const [error, tag, retryable] of cases) {
+        const transporter = {
+          sendMail: () => Effect.fail(error).pipe(Effect.runPromise),
+        };
+        const failure = yield* Effect.gen(function* () {
+          const email = yield* Email;
+          return yield* email.send(message);
+        }).pipe(Effect.provide(provideSmtp(transporter)), Effect.flip);
+
+        assert.strictEqual(failure._tag, tag);
+        assert.strictEqual(failure.provider, "smtp");
+        assert.strictEqual(failure.retryable, retryable);
+      }
+
+      const malformedCases = [{}, { messageId: "" }, { messageId: " " }, { messageId: 123 }];
+      for (const info of malformedCases) {
+        const transporter = {
+          sendMail: () => Promise.resolve(info),
+        };
+        const failure = yield* Effect.gen(function* () {
+          const email = yield* Email;
+          return yield* email.send(message);
+        }).pipe(Effect.provide(provideSmtp(transporter)), Effect.flip);
+
+        assert.ok(Predicate.isTagged(failure, "ProviderProtocolFailure"));
+        assert.strictEqual(failure.provider, "smtp");
+        assert.strictEqual(failure.retryable, false);
+      }
+    }),
+  );
 });
