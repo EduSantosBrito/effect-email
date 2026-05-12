@@ -11,10 +11,14 @@ interface SmtpAttachment {
 export interface SmtpMailOptions {
   readonly from: string;
   readonly to: string[];
+  readonly cc?: string[];
+  readonly bcc?: string[];
+  readonly replyTo?: string[];
   readonly subject: string;
   readonly text?: string;
   readonly html?: string;
   readonly attachments?: SmtpAttachment[];
+  readonly headers?: Record<string, string>;
 }
 
 const bodyText = MessageBody.$match({
@@ -41,6 +45,18 @@ const formatMailbox = (mailbox: Mailbox): string =>
 export const mailOptions = (message: EmailMessage): SmtpMailOptions => ({
   from: formatMailbox(message.from),
   to: message.to.map(formatMailbox),
+  ...Option.match(Option.fromUndefinedOr(message.cc), {
+    onNone: () => ({}),
+    onSome: (cc) => ({ cc: cc.map(formatMailbox) }),
+  }),
+  ...Option.match(Option.fromUndefinedOr(message.bcc), {
+    onNone: () => ({}),
+    onSome: (bcc) => ({ bcc: bcc.map(formatMailbox) }),
+  }),
+  ...Option.match(Option.fromUndefinedOr(message.replyTo), {
+    onNone: () => ({}),
+    onSome: (replyTo) => ({ replyTo: replyTo.map(formatMailbox) }),
+  }),
   subject: message.subject,
   ...Option.match(bodyText(message.body), {
     onNone: () => ({}),
@@ -59,6 +75,12 @@ export const mailOptions = (message: EmailMessage): SmtpMailOptions => ({
         content: Buffer.from(attachment.content),
         ...(attachment.contentId !== undefined ? { cid: attachment.contentId } : {}),
       })),
+    }),
+  }),
+  ...Option.match(Option.fromUndefinedOr(message.headers), {
+    onNone: () => ({}),
+    onSome: (headers) => ({
+      headers: Object.fromEntries(headers.values.map((header) => [header.name, header.value])),
     }),
   }),
 });
