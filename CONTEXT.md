@@ -39,6 +39,22 @@ The MVP **Transport Adapter** that sends email through Resend over HTTP.
 A redacted credential used by a **Transport Adapter** to authenticate with its provider.
 _Avoid_: API key string
 
+**SMTP Credential**:
+A redacted **Provider Secret** used by the **SMTP Adapter** to authenticate with an SMTP server.
+_Avoid_: SMTP password string
+
+**SMTP Password Authentication**:
+The first **SMTP Adapter** authentication mode, using a username and redacted **SMTP Credential**.
+_Avoid_: OAuth2, token refresh
+
+**SMTP Secure Mode**:
+The **SMTP Adapter** setting for implicit TLS on connection, not a guarantee that STARTTLS is disabled.
+_Avoid_: No TLS flag
+
+**SMTP Connection Settings**:
+The minimal non-secret connection configuration for the first **SMTP Adapter** slice: host, port, and **SMTP Secure Mode**.
+_Avoid_: Nodemailer options bag
+
 **Trusted Runtime**:
 A server-side environment where **Provider Secrets** can be used without exposing them to end users.
 _Avoid_: Browser provider adapter
@@ -92,9 +108,17 @@ A **Transport Adapter** used by tests to inspect requested email sends through E
 Proof that a **Transport Adapter** accepted an **Email Message** for delivery.
 _Avoid_: Delivery receipt
 
+**SMTP Message ID**:
+The message identifier reported by the **SMTP Adapter** after provider acceptance.
+_Avoid_: Delivery proof, dedupe key
+
 **Send Failure**:
 A classified failure that prevented a **Transport Adapter** from accepting an **Email Message**.
 _Avoid_: Raw provider error
+
+**SMTP Failure Mapping**:
+Classification of Nodemailer failures into the existing provider-neutral **Send Failure** taxonomy.
+_Avoid_: Raw Nodemailer error
 
 **Duplicate Send**:
 An unintended second acceptance of the same **Email Message** by a transport.
@@ -107,7 +131,12 @@ Configurable local limits that constrain an **Email Message** before it reaches 
 _Avoid_: Provider-only validation
 
 **SMTP Adapter**:
-A deferred **Transport Adapter** for direct SMTP delivery, intentionally excluded from the MVP.
+A provider-neutral **Transport Adapter** for direct SMTP delivery, exposed as `effect-email/smtp`, implemented with Nodemailer, and using the existing **Email Message** surface before new message capabilities are added.
+_Avoid_: Nodemailer adapter
+
+**SMTP Client Service**:
+The subpath-local Effect service that performs SMTP sends for the **SMTP Adapter**.
+_Avoid_: Public root client
 
 ## Relationships
 
@@ -121,14 +150,32 @@ A deferred **Transport Adapter** for direct SMTP delivery, intentionally exclude
 - An **Email Message** rejects duplicate recipients across to, cc, and bcc.
 - Sending an **Email Message** returns a **Send Receipt** when the transport accepts it.
 - Sending an **Email Message** can fail with a **Send Failure**.
+- The first **SMTP Adapter** slice maps Nodemailer errors into the existing **Send Failure** classes instead of adding SMTP-specific public error types.
+- **SMTP Failure Mapping** treats authentication errors as **AuthenticationFailure**, recipient or message rejection as **RejectedMessageFailure**, connection, TLS, and timeout problems as **TransportUnavailableFailure**, and malformed transport responses as **ProviderProtocolFailure**.
+- The **SMTP Adapter** returns `provider: "smtp"` in its **Send Receipt**.
+- The **SMTP Adapter** uses the transport-reported **SMTP Message ID** as the **Send Receipt** message ID.
+- An **SMTP Message ID** is not proof of recipient delivery and is not a duplicate-send prevention key.
 - The SDK does not retry sending automatically because retries can cause a **Duplicate Send**.
 - SDK-authored telemetry does not include **Email PII** by default.
 - The MVP includes a **Resend Adapter** and a **Test Adapter**.
 - The MVP excludes the **SMTP Adapter** because direct SMTP has larger security and protocol surface area.
+- The next provider-neutral package step is an **SMTP Adapter** using the current **Email Message** surface only.
+- The first **SMTP Adapter** slice must support the whole current **Email Message** surface: text body, HTML body, attachments, inline attachments, and **Email Headers**.
+- A second real **Transport Adapter** should prove the core contract before adding provider-shaped capabilities such as tags, scheduling, templates, idempotency keys, webhooks, or provider metadata.
+- The **SMTP Adapter** subpath is named for the provider-neutral capability (`effect-email/smtp`), not the implementation library.
+- The **SMTP Adapter** is implemented with Nodemailer because SMTP protocol maturity is more important than TypeScript-native internals.
+- The **SMTP Adapter** exports an **SMTP Client Service** from `effect-email/smtp` for testability and custom Layer composition.
+- The **SMTP Client Service** is not exported from the provider-neutral root API.
 - A **Test Adapter** exposes sent **Email Messages** for assertions without global state.
 - A **Provider-Specific Option** does not belong in the core **Email Message** contract.
 - A **Provider Secret** is supplied as redacted Effect configuration, not as a plain string.
 - A provider-backed **Transport Adapter** runs only in a **Trusted Runtime**.
+- An **SMTP Credential** is supplied as redacted Effect configuration, while non-secret SMTP connection settings such as host, port, and secure mode are regular Effect configuration.
+- The first **SMTP Adapter** slice exposes minimal **SMTP Connection Settings**, **SMTP Password Authentication**, and no general Nodemailer options bag.
+- SMTP pool, proxy, DKIM, DSN, and TLS override settings are deferred until they are modeled as provider-neutral concepts or explicit subpath-local SMTP options.
+- The first **SMTP Adapter** slice supports **SMTP Password Authentication** only.
+- OAuth2 and advanced SMTP authentication are deferred until the basic **SMTP Adapter** contract is proven.
+- **SMTP Secure Mode** follows Nodemailer semantics: enabled means implicit TLS on connect, disabled still allows STARTTLS upgrade when the server supports it.
 - The MVP **Email Message** surface includes from, to, cc, bcc, reply-to, subject, text, HTML, and **Attachments**.
 - The MVP excludes custom headers, tags, scheduling, batch sending, templates, idempotency keys, webhooks, and provider metadata.
 - An **Email Message** has at least one non-empty body: text, HTML, or both.
@@ -185,8 +232,14 @@ A deferred **Transport Adapter** for direct SMTP delivery, intentionally exclude
 > **Dev:** "Does a successful send mean the recipient received the email?"
 > **Domain expert:** "No. It means the transport accepted the email and returned a Send Receipt."
 
+> **Dev:** "Does an SMTP Message ID prove delivery or prevent duplicate sends?"
+> **Domain expert:** "No. It identifies the accepted message but is not delivery proof or a dedupe key."
+
 > **Dev:** "Can users inspect the raw Resend error body?"
 > **Domain expert:** "No, not by default. Send failures expose classified, safe details because raw provider bodies can leak email content or addresses."
+
+> **Dev:** "Should the first SMTP Adapter expose Nodemailer errors directly?"
+> **Domain expert:** "No. Map them into the existing Send Failure classes unless the provider-neutral taxonomy proves insufficient."
 
 > **Dev:** "Can an attachment point to `/tmp/report.pdf`?"
 > **Domain expert:** "No. The SDK receives bytes only; callers decide how files or URLs are loaded."
@@ -251,9 +304,40 @@ A deferred **Transport Adapter** for direct SMTP delivery, intentionally exclude
 > **Dev:** "Can a display name contain non-English text?"
 > **Domain expert:** "Yes, but it is validated as safe display text, not raw header syntax."
 
+> **Dev:** "Should the next package step add Resend idempotency keys?"
+> **Domain expert:** "No. Idempotency keys are provider-specific, so the next step should stay provider-neutral."
+
+> **Dev:** "Should the next package step add an SMTP Adapter?"
+> **Domain expert:** "Yes. Add an SMTP Adapter using the current Email Message surface only, so a second real transport proves the core contract before new message capabilities are added."
+
+> **Dev:** "Can the first SMTP Adapter skip attachments or Email Headers?"
+> **Domain expert:** "No. Current core surface means text, HTML, attachments, inline attachments, and Email Headers."
+
+> **Dev:** "Should the SMTP Adapter be named `effect-email/nodemailer`?"
+> **Domain expert:** "No. The public subpath is `effect-email/smtp`; Nodemailer is the implementation library."
+
+> **Dev:** "Should the SMTP Adapter use emailjs because it is TypeScript-native?"
+> **Domain expert:** "No. Use Nodemailer because SMTP protocol maturity matters more than TypeScript-native internals."
+
+> **Dev:** "Should the SMTP Adapter export only Layers?"
+> **Domain expert:** "No. Export a subpath-local SMTP Client Service too, matching the Resend adapter shape for testability and composition."
+
+> **Dev:** "Can SMTP passwords be passed as plain strings?"
+> **Domain expert:** "No. SMTP credentials are Provider Secrets and use redacted Effect configuration."
+
+> **Dev:** "Should the first SMTP Adapter include OAuth2?"
+> **Domain expert:** "No. Start with SMTP Password Authentication only; OAuth2 can follow after the adapter shape is proven."
+
+> **Dev:** "Does SMTP secure=false mean the adapter forbids TLS?"
+> **Domain expert:** "No. It means no implicit TLS on connect; STARTTLS may still upgrade the connection when the server supports it."
+
+> **Dev:** "Should the first SMTP Adapter expose Nodemailer's full options bag?"
+> **Domain expert:** "No. Start with host, port, secure mode, username, and redacted password only."
+
 ## Flagged Ambiguities
 
 - "layer" was used to mean provider implementation; resolved: canonical term is **Transport Adapter**, exposed through Effect Layers.
 - "full email surface" was used broadly; resolved: the core **Email Message** surface is provider-neutral, not Resend-shaped.
 - "delivery" was used ambiguously; resolved: v0 only models provider acceptance as a **Send Receipt**.
 - "custom headers" was used broadly; resolved: canonical term is **Email Header**, limited to validated provider-neutral header fields.
+- "provider agnostic" was used as an alias; resolved: canonical term is **provider-neutral**.
