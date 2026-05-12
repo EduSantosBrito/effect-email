@@ -104,30 +104,58 @@ const program = Effect.gen(function* () {
 });
 ```
 
+For inline attachments, add a Content ID and reference it from HTML with `cid:`. Content IDs are stored without MIME angle brackets and must be ASCII, non-empty, single-line values with exactly one `@`.
+
+```ts
+const program = Effect.gen(function* () {
+  const email = yield* Email;
+  const message = yield* EmailMessage.make({
+    from: "Acme <onboarding@example.com>",
+    to: "user@example.com",
+    subject: "Welcome",
+    html: '<img src="cid:logo@example.com" alt="Acme">',
+    attachments: [
+      {
+        name: "logo.png",
+        mediaType: "image/png",
+        content: logoBytes,
+        contentId: "logo@example.com",
+      },
+    ],
+  });
+
+  yield* email.send(message);
+});
+```
+
 ## Send Headers
 
 Email Headers are provider-neutral custom fields on the message. Use a record for common cases:
 
 ```ts
-const message = yield* EmailMessage.make({
-  from: "Acme <onboarding@example.com>",
-  to: "user@example.com",
-  subject: "Hello",
-  text: "Plain",
-  headers: { "X-Campaign-ID": "spring-2026" },
-});
+const message =
+  yield *
+  EmailMessage.make({
+    from: "Acme <onboarding@example.com>",
+    to: "user@example.com",
+    subject: "Hello",
+    text: "Plain",
+    headers: { "X-Campaign-ID": "spring-2026" },
+  });
 ```
 
 Use an ordered list when order, casing, or spacing matters. Header names are trimmed and casing is preserved. Header values are preserved exactly, except blank, multiline, and control-character values are rejected. Parsed messages store headers as an `EmailHeaders` collection; use `EmailHeaders.toReadonlyArray(message.headers)` when test or adapter code needs ordered inspection.
 
 ```ts
-const message = yield* EmailMessage.make({
-  from: "Acme <onboarding@example.com>",
-  to: "user@example.com",
-  subject: "Hello",
-  text: "Plain",
-  headers: [{ name: " X-Trace-ID ", value: "  keep spacing  " }],
-});
+const message =
+  yield *
+  EmailMessage.make({
+    from: "Acme <onboarding@example.com>",
+    to: "user@example.com",
+    subject: "Hello",
+    text: "Plain",
+    headers: [{ name: " X-Trace-ID ", value: "  keep spacing  " }],
+  });
 ```
 
 Email Headers are not raw MIME escape hatches. Structured fields such as `From`, `To`, `Reply-To`, and `Subject`; MIME, authentication, and delivery fields such as `Content-Type`, `Message-ID`, `DKIM-Signature`, and `Received`; duplicate names; and provider-reserved `Resend-*` / `X-Resend-*` names are rejected before send.

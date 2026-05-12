@@ -52,6 +52,7 @@ const ResendRequestBodySchema = Schema.Struct({
         filename: Schema.String,
         content_type: Schema.String,
         content: Schema.String,
+        content_id: Schema.optional(Schema.String),
       }),
     ),
   ),
@@ -577,6 +578,39 @@ describe("effect-email Resend adapter", () => {
 
       const bodyWithoutHeaders = yield* decodeResendRequestBody(requestBody(yield* makeMessage()));
       assert.strictEqual(bodyWithoutHeaders.headers, undefined);
+    }),
+  );
+
+  it.effect("maps inline attachment content IDs to Resend payloads", () =>
+    Effect.gen(function* () {
+      const message = yield* makeMessage({
+        html: '<img src="cid:logo@example.com" alt="logo">',
+        attachments: [
+          {
+            name: "logo.png",
+            mediaType: "image/png",
+            content: new Uint8Array([1]),
+            contentId: "logo@example.com",
+          },
+          {
+            name: "report.txt",
+            mediaType: "text/plain",
+            content: new Uint8Array([104, 105]),
+          },
+        ],
+      });
+
+      const body = yield* decodeResendRequestBody(requestBody(message));
+
+      assert.deepStrictEqual(body.attachments, [
+        {
+          filename: "logo.png",
+          content_type: "image/png",
+          content: "AQ==",
+          content_id: "logo@example.com",
+        },
+        { filename: "report.txt", content_type: "text/plain", content: "aGk=" },
+      ]);
     }),
   );
 
