@@ -8,6 +8,7 @@ import {
 } from "effect/unstable/http";
 import {
   Attachment,
+  ContentId,
   DisplayName,
   Email,
   EmailHeader,
@@ -63,6 +64,7 @@ const decodeDisplayName = Schema.decodeUnknownEffect(DisplayName);
 const decodeEmailHeaderName = Schema.decodeUnknownEffect(EmailHeaderName);
 const decodeEmailHeaderValue = Schema.decodeUnknownEffect(EmailHeaderValue);
 const decodeMediaType = Schema.decodeUnknownEffect(MediaType);
+const decodeContentId = Schema.decodeUnknownEffect(ContentId);
 
 const headerValues = (headers: EmailHeadersShape | undefined) => {
   assert.ok(headers);
@@ -255,6 +257,65 @@ describe("effect-email constructors", () => {
       yield* decodeEmailAddress("bad(comment)@example.com").pipe(Effect.flip);
     }),
   );
+
+  it.effect("parses provider-neutral inline attachment content IDs", () =>
+    Effect.gen(function* () {
+      const attachment = yield* Attachment.make({
+        name: "logo.png",
+        mediaType: "image/png",
+        content: new Uint8Array([1]),
+        contentId: "logo@example.com",
+      });
+      assert.strictEqual(attachment.contentId, "logo@example.com");
+      assert.strictEqual(yield* decodeContentId("logo@example.com"), "logo@example.com");
+
+      const withoutContentId = yield* Attachment.make({
+        name: "report.txt",
+        mediaType: "text/plain",
+        content: new Uint8Array([104, 105]),
+      });
+      assert.strictEqual(withoutContentId.contentId, undefined);
+
+      const message = yield* makeMessage({
+        html: '<img src="cid:logo@example.com" alt="logo">',
+        attachments: {
+          name: "logo.png",
+          mediaType: "image/png",
+          content: new Uint8Array([1]),
+          contentId: "logo@example.com",
+        },
+      });
+      assert.strictEqual(message.attachments?.[0]?.contentId, "logo@example.com");
+
+      const cases = [
+        "<logo@example.com>",
+        "logo",
+        "logo @example.com",
+        "logo@example.com\nnext",
+        "logo@exampl\u00e9.com",
+      ];
+      for (const contentId of cases) {
+        const attachmentFailure = yield* Attachment.make({
+          name: "logo.png",
+          mediaType: "image/png",
+          content: new Uint8Array([1]),
+          contentId,
+        }).pipe(Effect.flip);
+        assert.strictEqual(attachmentFailure.reason, "InvalidContentId");
+
+        const messageFailure = yield* makeMessage({
+          attachments: {
+            name: "logo.png",
+            mediaType: "image/png",
+            content: new Uint8Array([1]),
+            contentId,
+          },
+        }).pipe(Effect.flip);
+        assert.strictEqual(messageFailure.field, "attachments");
+        assert.strictEqual(messageFailure.reason, "InvalidContentId");
+      }
+    }),
+  );
 });
 
 describe("effect-email policy and test adapter", () => {
@@ -394,6 +455,27 @@ describe("effect-email policy and test adapter", () => {
           ),
         ),
       );
+    }),
+  );
+
+  it.effect("preserves inline attachment content IDs through inspection", () =>
+    Effect.gen(function* () {
+      const message = yield* makeMessage({
+        html: '<img src="cid:logo@example.com" alt="logo">',
+        attachments: {
+          name: "logo.png",
+          mediaType: "image/png",
+          content: new Uint8Array([1]),
+          contentId: "logo@example.com",
+        },
+      });
+      yield* Effect.gen(function* () {
+        const email = yield* Email;
+        const inspection = yield* TestEmail.TestEmailInspection;
+        yield* email.send(message);
+        const sent = yield* inspection.sent;
+        assert.strictEqual(sent[0]?.attachments?.[0]?.contentId, "logo@example.com");
+      }).pipe(Effect.provide(TestEmail.defaultLayer));
     }),
   );
 });

@@ -5,6 +5,7 @@
 .repos/opencode and .repos/t3code are used as reference of big applications that uses Effect in production.
 
 Every public API change must consider whether these also need updates:
+
 - README.md
 - examples
 - packages/effect-email/test/public-api-imports.ts
