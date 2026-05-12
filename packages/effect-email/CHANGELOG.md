@@ -1,5 +1,10 @@
 # effect-email
 
+## 0.6.0
+
+- Add `effect-email/smtp`, a trusted-runtime SMTP adapter backed by Nodemailer.
+- Support SMTP text, HTML, multipart, recipients, headers, regular attachments, inline CID attachments, and provider-neutral failure classification.
+
 ## 0.5.0
 
 - Make `EmailMessage` constructor-only and parse messages into trusted subject, body, and header domain values.
