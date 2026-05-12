@@ -95,7 +95,7 @@ const toResendRequestBody = (message: EmailMessage): ResendRequestBody => ({
     })),
   ),
   headers: Option.map(Option.fromUndefinedOr(message.headers), (headers) =>
-    Object.fromEntries(headers.map((header) => [header.name, header.value])),
+    Object.fromEntries(headers.values.map((header) => [header.name, header.value])),
   ),
 });
 

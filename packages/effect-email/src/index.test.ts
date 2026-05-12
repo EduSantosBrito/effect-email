@@ -11,6 +11,7 @@ import {
   DisplayName,
   Email,
   EmailHeader,
+  EmailHeaders,
   EmailHeaderName,
   EmailHeaderValue,
   EmailAddress,
@@ -19,6 +20,7 @@ import {
   MediaType,
   MessageBody,
   SendPolicy,
+  type EmailHeaders as EmailHeadersShape,
   type EmailMessageInput,
 } from "./index";
 import { requestBody } from "./internal/resend-request";
@@ -61,6 +63,11 @@ const decodeDisplayName = Schema.decodeUnknownEffect(DisplayName);
 const decodeEmailHeaderName = Schema.decodeUnknownEffect(EmailHeaderName);
 const decodeEmailHeaderValue = Schema.decodeUnknownEffect(EmailHeaderValue);
 const decodeMediaType = Schema.decodeUnknownEffect(MediaType);
+
+const headerValues = (headers: EmailHeadersShape | undefined) => {
+  assert.ok(headers);
+  return EmailHeaders.toReadonlyArray(headers);
+};
 
 const provideResend = (
   client: HttpClient.HttpClient,
@@ -125,7 +132,7 @@ describe("effect-email constructors", () => {
       const recordMessage = yield* makeMessage({
         headers: { "X-Campaign-ID": "spring-2026" },
       });
-      assert.deepStrictEqual(recordMessage.headers, [
+      assert.deepStrictEqual(headerValues(recordMessage.headers), [
         { name: "X-Campaign-ID", value: "spring-2026" },
       ]);
 
@@ -135,7 +142,7 @@ describe("effect-email constructors", () => {
           { name: "X-Campaign-ID", value: "spring-2026" },
         ],
       });
-      assert.deepStrictEqual(orderedMessage.headers, [
+      assert.deepStrictEqual(headerValues(orderedMessage.headers), [
         { name: "X-Trace-ID", value: "  keep spacing  " },
         { name: "X-Campaign-ID", value: "spring-2026" },
       ]);
@@ -261,11 +268,11 @@ describe("effect-email policy and test adapter", () => {
       }).pipe(Effect.provide(Layer.succeed(SendPolicy)(SendPolicy.layer({}))));
 
       const policyCases: ReadonlyArray<readonly [Partial<SendPolicy.Config>, string]> = [
-        [{ maxRecipients: 0 }, "TooManyRecipients"],
+        [{ maxRecipients: 1 }, "TooManyRecipients"],
         [{ maxSubjectBytes: 1 }, "SubjectTooLarge"],
         [{ maxTextBodyBytes: 1 }, "TextBodyTooLarge"],
         [{ maxHtmlBodyBytes: 1 }, "HtmlBodyTooLarge"],
-        [{ maxAttachments: 0 }, "TooManyAttachments"],
+        [{ maxAttachments: 1 }, "TooManyAttachments"],
         [{ maxAttachmentBytes: 1 }, "AttachmentTooLarge"],
         [{ maxTotalAttachmentBytes: 1 }, "TotalAttachmentsTooLarge"],
         [{ maxHeaders: 1 }, "TooManyHeaders"],
@@ -274,12 +281,20 @@ describe("effect-email policy and test adapter", () => {
         [{ maxTotalHeaderBytes: 10 }, "TotalHeadersTooLarge"],
       ];
       const policyMessage = yield* makeMessage({
+        to: ["one@example.com", "two@example.com"],
         html: "Plain html",
-        attachments: {
-          name: "report.txt",
-          mediaType: "text/plain",
-          content: new Uint8Array([104, 105]),
-        },
+        attachments: [
+          {
+            name: "report.txt",
+            mediaType: "text/plain",
+            content: new Uint8Array([104, 105]),
+          },
+          {
+            name: "summary.txt",
+            mediaType: "text/plain",
+            content: new Uint8Array([104, 105]),
+          },
+        ],
         headers: [
           { name: "X-Trace-ID", value: "trace-value" },
           { name: "X-Campaign-ID", value: "spring-2026" },
@@ -293,10 +308,23 @@ describe("effect-email policy and test adapter", () => {
         assert.strictEqual(failure.reason, reason);
       }
 
+      const invalidConfigCases: ReadonlyArray<Partial<SendPolicy.Config>> = [
+        { maxRecipients: 0 },
+        { maxRecipients: -1 },
+        { maxRecipients: 1.5 },
+        { maxRecipients: Number.NaN },
+        { maxRecipients: Number.POSITIVE_INFINITY },
+        { maxRecipients: Number.NEGATIVE_INFINITY },
+      ];
+      for (const config of invalidConfigCases) {
+        assert.throws(() => SendPolicy.layer(config));
+      }
+
+      const rejectedMessage = yield* makeMessage({ to: ["one@example.com", "two@example.com"] });
       yield* Effect.gen(function* () {
         const email = yield* Email;
         const inspection = yield* TestEmail.TestEmailInspection;
-        const failure = yield* email.send(message).pipe(Effect.flip);
+        const failure = yield* email.send(rejectedMessage).pipe(Effect.flip);
         assert.strictEqual(failure._tag, "SendPolicyViolation");
         if (Predicate.isTagged(failure, "SendPolicyViolation")) {
           assert.strictEqual(failure.reason, "TooManyRecipients");
@@ -305,7 +333,7 @@ describe("effect-email policy and test adapter", () => {
       }).pipe(
         Effect.provide(
           TestEmail.layer.pipe(
-            Layer.provide(Layer.succeed(SendPolicy)(SendPolicy.layer({ maxRecipients: 0 }))),
+            Layer.provide(Layer.succeed(SendPolicy)(SendPolicy.layer({ maxRecipients: 1 }))),
           ),
         ),
       );
@@ -314,7 +342,7 @@ describe("effect-email policy and test adapter", () => {
 
   it.effect("supports sent, takeSent, and clear inspection APIs", () =>
     Effect.gen(function* () {
-      const message = yield* makeMessage();
+      const message = yield* makeMessage({ to: ["one@example.com", "two@example.com"] });
       yield* Effect.gen(function* () {
         const email = yield* Email;
         const inspection = yield* TestEmail.TestEmailInspection;
@@ -332,11 +360,20 @@ describe("effect-email policy and test adapter", () => {
   it.effect("records accepted headers and skips recording on header policy failure", () =>
     Effect.gen(function* () {
       const message = yield* makeMessage({ headers: { "X-Campaign-ID": "spring-2026" } });
+      const rejectedHeadersMessage = yield* makeMessage({
+        headers: [
+          { name: "X-Trace-ID", value: "trace-value" },
+          { name: "X-Campaign-ID", value: "spring-2026" },
+        ],
+      });
       yield* Effect.gen(function* () {
         const email = yield* Email;
         const inspection = yield* TestEmail.TestEmailInspection;
         yield* email.send(message);
-        assert.deepStrictEqual((yield* inspection.sent)[0]?.headers, [
+        const sent = yield* inspection.sent;
+        const sentMessage = sent[0];
+        assert.ok(sentMessage);
+        assert.deepStrictEqual(headerValues(sentMessage.headers), [
           { name: "X-Campaign-ID", value: "spring-2026" },
         ]);
       }).pipe(Effect.provide(TestEmail.defaultLayer));
@@ -344,7 +381,7 @@ describe("effect-email policy and test adapter", () => {
       yield* Effect.gen(function* () {
         const email = yield* Email;
         const inspection = yield* TestEmail.TestEmailInspection;
-        const failure = yield* email.send(message).pipe(Effect.flip);
+        const failure = yield* email.send(rejectedHeadersMessage).pipe(Effect.flip);
         assert.ok(Predicate.isTagged(failure, "SendPolicyViolation"));
         if (Predicate.isTagged(failure, "SendPolicyViolation")) {
           assert.strictEqual(failure.reason, "TooManyHeaders");
@@ -353,7 +390,7 @@ describe("effect-email policy and test adapter", () => {
       }).pipe(
         Effect.provide(
           TestEmail.layer.pipe(
-            Layer.provide(Layer.succeed(SendPolicy)(SendPolicy.layer({ maxHeaders: 0 }))),
+            Layer.provide(Layer.succeed(SendPolicy)(SendPolicy.layer({ maxHeaders: 1 }))),
           ),
         ),
       );
@@ -463,13 +500,13 @@ describe("effect-email Resend adapter", () => {
           ),
         ),
       );
-      const message = yield* makeMessage();
+      const message = yield* makeMessage({ to: ["one@example.com", "two@example.com"] });
       const failure = yield* Effect.gen(function* () {
         const email = yield* Email;
         return yield* email.send(message);
       }).pipe(
         Effect.provide(
-          provideResend(client, Layer.succeed(SendPolicy)(SendPolicy.layer({ maxRecipients: 0 }))),
+          provideResend(client, Layer.succeed(SendPolicy)(SendPolicy.layer({ maxRecipients: 1 }))),
         ),
         Effect.flip,
       );

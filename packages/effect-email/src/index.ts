@@ -68,6 +68,33 @@ export const EmailHeaderValue = Schema.String.check(
   }),
 ).pipe(Schema.brand("EmailHeaderValue"));
 export type EmailHeaderValue = typeof EmailHeaderValue.Type;
+export const Subject = Schema.String.check(
+  Schema.isNonEmpty(),
+  Schema.makeFilter((value: string) => value.trim().length > 0, {
+    expected: "a non-blank subject",
+  }),
+  Schema.makeFilter((value: string) => !value.includes("\r") && !value.includes("\n"), {
+    expected: "a single-line subject",
+  }),
+  Schema.makeFilter((value: string) => !hasControlCharacter(value), {
+    expected: "a subject with no control characters",
+  }),
+).pipe(Schema.brand("Subject"));
+export type Subject = typeof Subject.Type;
+export const TextBody = Schema.String.check(
+  Schema.isNonEmpty(),
+  Schema.makeFilter((value: string) => value.trim().length > 0, {
+    expected: "a non-blank text body",
+  }),
+).pipe(Schema.brand("TextBody"));
+export type TextBody = typeof TextBody.Type;
+export const HtmlBody = Schema.String.check(
+  Schema.isNonEmpty(),
+  Schema.makeFilter((value: string) => value.trim().length > 0, {
+    expected: "a non-blank HTML body",
+  }),
+).pipe(Schema.brand("HtmlBody"));
+export type HtmlBody = typeof HtmlBody.Type;
 
 export interface Mailbox {
   readonly address: EmailAddress;
@@ -85,25 +112,33 @@ export interface EmailHeader {
   readonly value: EmailHeaderValue;
 }
 
+const EmailHeadersTypeId = "~effect-email/EmailHeaders";
+export interface EmailHeaders {
+  readonly [EmailHeadersTypeId]: typeof EmailHeadersTypeId;
+  readonly values: readonly [EmailHeader, ...EmailHeader[]];
+}
+
 export type MessageBody = Data.TaggedEnum<{
-  TextOnly: { readonly text: string };
-  HtmlOnly: { readonly html: string };
-  TextAndHtml: { readonly text: string; readonly html: string };
+  TextOnly: { readonly text: TextBody };
+  HtmlOnly: { readonly html: HtmlBody };
+  TextAndHtml: { readonly text: TextBody; readonly html: HtmlBody };
 }>;
 
 const MessageBodyVariants = Data.taggedEnum<MessageBody>();
 
+const EmailMessageTypeId = "~effect-email/EmailMessage";
 export interface EmailMessage {
+  readonly [EmailMessageTypeId]: typeof EmailMessageTypeId;
   readonly messageType: "EmailMessage";
   readonly from: Mailbox;
   readonly to: readonly [Mailbox, ...Mailbox[]];
   readonly cc?: readonly [Mailbox, ...Mailbox[]];
   readonly bcc?: readonly [Mailbox, ...Mailbox[]];
   readonly replyTo?: readonly [Mailbox, ...Mailbox[]];
-  readonly subject: string;
+  readonly subject: Subject;
   readonly body: MessageBody;
   readonly attachments?: readonly [Attachment, ...Attachment[]];
-  readonly headers?: readonly [EmailHeader, ...EmailHeader[]];
+  readonly headers?: EmailHeaders;
 }
 
 const MailboxSchema = Schema.declare<Mailbox>(
@@ -116,9 +151,9 @@ const AttachmentListSchema = Schema.declare<readonly [Attachment, ...Attachment[
   (input): input is readonly [Attachment, ...Attachment[]] =>
     Array.isArray(input) && input.length > 0,
 );
-const EmailHeaderListSchema = Schema.declare<readonly [EmailHeader, ...EmailHeader[]]>(
-  (input): input is readonly [EmailHeader, ...EmailHeader[]] =>
-    Array.isArray(input) && input.length > 0,
+const EmailHeadersSchema = Schema.declare<EmailHeaders>(
+  (input): input is EmailHeaders =>
+    typeof input === "object" && input !== null && EmailHeadersTypeId in input,
 );
 const MessageBodySchema = Schema.declare<MessageBody>(
   (input): input is MessageBody =>
@@ -127,16 +162,17 @@ const MessageBodySchema = Schema.declare<MessageBody>(
     MessageBodyVariants.$is("TextAndHtml")(input),
 );
 const ParsedEmailMessage = Schema.Struct({
+  [EmailMessageTypeId]: Schema.Literal(EmailMessageTypeId),
   messageType: Schema.Literal("EmailMessage"),
   from: MailboxSchema,
   to: MailboxListSchema,
   cc: Schema.OptionFromOptionalKey(MailboxListSchema),
   bcc: Schema.OptionFromOptionalKey(MailboxListSchema),
   replyTo: Schema.OptionFromOptionalKey(MailboxListSchema),
-  subject: Schema.String,
+  subject: Subject,
   body: MessageBodySchema,
   attachments: Schema.OptionFromOptionalKey(AttachmentListSchema),
-  headers: Schema.OptionFromOptionalKey(EmailHeaderListSchema),
+  headers: Schema.OptionFromOptionalKey(EmailHeadersSchema),
 });
 type ParsedEmailMessage = typeof ParsedEmailMessage.Type;
 const encodeEmailMessage = Schema.encodeUnknownSync(ParsedEmailMessage);
@@ -322,18 +358,24 @@ export type SendFailure =
   | TransportUnavailableFailure
   | ProviderProtocolFailure;
 
+const SendPolicyLimit = Schema.Number.check(
+  Schema.isFinite(),
+  Schema.isInt(),
+  Schema.isGreaterThan(0),
+);
+
 export const SendPolicyConfigInput = Schema.Struct({
-  maxRecipients: Schema.Number,
-  maxSubjectBytes: Schema.Number,
-  maxTextBodyBytes: Schema.Number,
-  maxHtmlBodyBytes: Schema.Number,
-  maxAttachments: Schema.Number,
-  maxAttachmentBytes: Schema.Number,
-  maxTotalAttachmentBytes: Schema.Number,
-  maxHeaders: Schema.Number,
-  maxHeaderNameBytes: Schema.Number,
-  maxHeaderValueBytes: Schema.Number,
-  maxTotalHeaderBytes: Schema.Number,
+  maxRecipients: SendPolicyLimit,
+  maxSubjectBytes: SendPolicyLimit,
+  maxTextBodyBytes: SendPolicyLimit,
+  maxHtmlBodyBytes: SendPolicyLimit,
+  maxAttachments: SendPolicyLimit,
+  maxAttachmentBytes: SendPolicyLimit,
+  maxTotalAttachmentBytes: SendPolicyLimit,
+  maxHeaders: SendPolicyLimit,
+  maxHeaderNameBytes: SendPolicyLimit,
+  maxHeaderValueBytes: SendPolicyLimit,
+  maxTotalHeaderBytes: SendPolicyLimit,
 });
 
 export type SendPolicyConfig = typeof SendPolicyConfigInput.Type;
@@ -342,15 +384,15 @@ export type EmailSend = (message: EmailMessage) => Effect.Effect<SendReceipt, Se
 const EmailSendSchema = Schema.declare<EmailSend>(
   (input): input is EmailSend => typeof input === "function",
 );
-const EmailInput = Schema.Struct({
-  send: EmailSendSchema,
-});
 
 const decodeEmailAddress = Schema.decodeUnknownEffect(EmailAddress);
 const decodeDisplayName = Schema.decodeUnknownEffect(DisplayName);
 const decodeMediaType = Schema.decodeUnknownEffect(MediaType);
 const decodeEmailHeaderName = Schema.decodeUnknownEffect(EmailHeaderName);
 const decodeEmailHeaderValue = Schema.decodeUnknownEffect(EmailHeaderValue);
+const decodeSubject = Schema.decodeUnknownEffect(Subject);
+const decodeTextBody = Schema.decodeUnknownEffect(TextBody);
+const decodeHtmlBody = Schema.decodeUnknownEffect(HtmlBody);
 const decodeMailboxInput = Schema.decodeUnknownEffect(MailboxInput);
 const decodeMessageBodyInput = Schema.decodeUnknownEffect(MessageBodyInput);
 const decodeAttachmentInput = Schema.decodeUnknownEffect(AttachmentInput);
@@ -506,7 +548,7 @@ const nonEmptyAttachmentArray: (
     return [head, ...tail];
   });
 
-const parseSubject: (input: unknown) => Effect.Effect<string, MessageContentValidationFailure> =
+const parseSubject: (input: unknown) => Effect.Effect<Subject, MessageContentValidationFailure> =
   Effect.fnUntraced(function* (input) {
     if (
       typeof input === "string" &&
@@ -515,9 +557,31 @@ const parseSubject: (input: unknown) => Effect.Effect<string, MessageContentVali
       !input.includes("\n") &&
       !hasControlCharacter(input)
     ) {
-      return input;
+      return yield* decodeSubject(input).pipe(
+        Effect.mapError(() => new MessageContentValidationFailure({ reason: "InvalidSubject" })),
+      );
     }
     return yield* new MessageContentValidationFailure({ reason: "InvalidSubject" });
+  });
+
+const parseTextBody: (input: unknown) => Effect.Effect<TextBody, MessageContentValidationFailure> =
+  Effect.fnUntraced(function* (input) {
+    if (typeof input !== "string" || !hasText(input)) {
+      return yield* new MessageContentValidationFailure({ reason: "InvalidTextBody" });
+    }
+    return yield* decodeTextBody(input).pipe(
+      Effect.mapError(() => new MessageContentValidationFailure({ reason: "InvalidTextBody" })),
+    );
+  });
+
+const parseHtmlBody: (input: unknown) => Effect.Effect<HtmlBody, MessageContentValidationFailure> =
+  Effect.fnUntraced(function* (input) {
+    if (typeof input !== "string" || !hasText(input)) {
+      return yield* new MessageContentValidationFailure({ reason: "InvalidHtmlBody" });
+    }
+    return yield* decodeHtmlBody(input).pipe(
+      Effect.mapError(() => new MessageContentValidationFailure({ reason: "InvalidHtmlBody" })),
+    );
   });
 
 const parseMessageBody: (
@@ -534,17 +598,16 @@ const parseMessageBody: (
     if (!textSupplied && !htmlSupplied) {
       return yield* new MessageContentValidationFailure({ reason: "EmptyBody" });
     }
-    if (textSupplied && (typeof textInput !== "string" || !hasText(textInput))) {
-      return yield* new MessageContentValidationFailure({ reason: "InvalidTextBody" });
-    }
-    if (htmlSupplied && (typeof htmlInput !== "string" || !hasText(htmlInput))) {
-      return yield* new MessageContentValidationFailure({ reason: "InvalidHtmlBody" });
-    }
+    const text = textSupplied ? yield* parseTextBody(textInput) : undefined;
+    const html = htmlSupplied ? yield* parseHtmlBody(htmlInput) : undefined;
     if (textSupplied && htmlSupplied) {
-      return MessageBodyVariants.TextAndHtml({ text: textInput, html: htmlInput });
+      if (text !== undefined && html !== undefined) {
+        return MessageBodyVariants.TextAndHtml({ text, html });
+      }
+      return yield* new MessageContentValidationFailure({ reason: "EmptyBody" });
     }
-    if (textSupplied) return MessageBodyVariants.TextOnly({ text: textInput });
-    if (typeof htmlInput === "string") return MessageBodyVariants.HtmlOnly({ html: htmlInput });
+    if (text !== undefined) return MessageBodyVariants.TextOnly({ text });
+    if (html !== undefined) return MessageBodyVariants.HtmlOnly({ html });
     return yield* new MessageContentValidationFailure({ reason: "InvalidHtmlBody" });
   },
 );
@@ -641,50 +704,63 @@ const parseEmailHeader: (
   },
 );
 
+const makeEmailHeaders = (values: readonly [EmailHeader, ...EmailHeader[]]): EmailHeaders => ({
+  [EmailHeadersTypeId]: EmailHeadersTypeId,
+  values,
+});
+
+const parseRequiredEmailHeaders: (
+  input: unknown,
+) => Effect.Effect<EmailHeaders, EmailHeaderValidationFailure> = Effect.fnUntraced(
+  function* (input) {
+    const rawHeaders = Array.isArray(input)
+      ? input
+      : Object.entries(
+          yield* decodeEmailHeadersRecordInput(input).pipe(
+            Effect.mapError(
+              () => new EmailHeaderValidationFailure({ reason: "InvalidHeaderName" }),
+            ),
+          ),
+        ).map(([name, headerValue]) => ({ name, value: headerValue }));
+    const [head, ...tail] = yield* Effect.forEach(rawHeaders, parseEmailHeader, {
+      concurrency: "unbounded",
+    });
+    if (head === undefined) {
+      return yield* new EmailHeaderValidationFailure({ reason: "InvalidHeaderName" });
+    }
+    const headers: readonly [EmailHeader, ...EmailHeader[]] = [head, ...tail];
+    if (Option.isSome(firstDuplicateBy(headers, (header) => header.name.toLowerCase()))) {
+      return yield* new EmailHeaderValidationFailure({ reason: "DuplicateHeaderName" });
+    }
+    return makeEmailHeaders(headers);
+  },
+);
+
 const parseEmailHeaders: (
   input: unknown,
-) => Effect.Effect<
-  readonly [EmailHeader, ...EmailHeader[]] | undefined,
-  EmailHeaderValidationFailure
-> = Effect.fnUntraced(function* (input) {
-  return yield* Option.match(Option.fromUndefinedOr(optionalValue(input)), {
-    onNone: () => Effect.void.pipe(Effect.as(undefined)),
-    onSome: (value) =>
-      Effect.gen(function* () {
-        const rawHeaders = Array.isArray(value)
-          ? value
-          : Object.entries(
-              yield* decodeEmailHeadersRecordInput(value).pipe(
-                Effect.mapError(
-                  () => new EmailHeaderValidationFailure({ reason: "InvalidHeaderName" }),
-                ),
-              ),
-            ).map(([name, headerValue]) => ({ name, value: headerValue }));
-        const [head, ...tail] = yield* Effect.forEach(rawHeaders, parseEmailHeader, {
-          concurrency: "unbounded",
-        });
-        if (head === undefined) return undefined;
-        const headers: readonly [EmailHeader, ...EmailHeader[]] = [head, ...tail];
-        if (Option.isSome(firstDuplicateBy(headers, (header) => header.name.toLowerCase()))) {
-          return yield* new EmailHeaderValidationFailure({ reason: "DuplicateHeaderName" });
-        }
-        return headers;
-      }),
-  });
-});
+) => Effect.Effect<EmailHeaders | undefined, EmailHeaderValidationFailure> = Effect.fnUntraced(
+  function* (input) {
+    return yield* Option.match(Option.fromUndefinedOr(optionalValue(input)), {
+      onNone: () => Effect.void.pipe(Effect.as(undefined)),
+      onSome: parseRequiredEmailHeaders,
+    });
+  },
+);
 
 const sendPolicyViolation = (
   message: EmailMessage,
   config: SendPolicyConfig,
 ): Option.Option<SendPolicyViolation> => {
   const attachments = Option.getOrElse(Option.fromUndefinedOr(message.attachments), () => []);
-  const headers = Option.getOrElse(Option.fromUndefinedOr(message.headers), () => []);
+  const headers = Option.getOrElse(
+    Option.map(Option.fromUndefinedOr(message.headers), (emailHeaders) => emailHeaders.values),
+    () => [],
+  );
   const violation = (reason: SendPolicyViolation["reason"], limit: number) =>
     new SendPolicyViolation({ reason, limit, retryable: false });
 
   return Match.value({
     recipientCount: message.to.length + optionalLength(message.cc) + optionalLength(message.bcc),
-    bodyEmpty: isBodyEmpty(message.body),
     subjectBytes: utf8Bytes(message.subject),
     textBytes: textBodyBytes(message.body),
     htmlBytes: htmlBodyBytes(message.body),
@@ -715,10 +791,6 @@ const sendPolicyViolation = (
     Match.when(
       ({ recipientCount }) => recipientCount > config.maxRecipients,
       () => violation("TooManyRecipients", config.maxRecipients),
-    ),
-    Match.when(
-      ({ bodyEmpty }) => bodyEmpty,
-      () => violation("EmptyBody", 1),
     ),
     Match.when(
       ({ subjectBytes }) => subjectBytes > config.maxSubjectBytes,
@@ -844,7 +916,8 @@ const parseEmailMessage: (
         reason: "DuplicateRecipient",
       });
     }
-    return encodeEmailMessage({
+    const message = encodeEmailMessage({
+      [EmailMessageTypeId]: EmailMessageTypeId,
       messageType: "EmailMessage",
       from,
       to,
@@ -856,6 +929,7 @@ const parseEmailMessage: (
       attachments: Option.fromUndefinedOr(attachments),
       headers: Option.fromUndefinedOr(headers),
     });
+    return { ...message, subject };
   },
 );
 
@@ -879,6 +953,12 @@ export const EmailHeader = {
   make: parseEmailHeader,
 };
 
+export const EmailHeaders = {
+  make: parseRequiredEmailHeaders,
+  toReadonlyArray: (headers: EmailHeaders): readonly [EmailHeader, ...EmailHeader[]] =>
+    headers.values,
+};
+
 export const EmailMessage = {
   make: parseEmailMessage,
 };
@@ -893,12 +973,6 @@ const htmlBodyBytes = MessageBody.$match({
   TextOnly: () => 0,
   HtmlOnly: ({ html }) => utf8Bytes(html),
   TextAndHtml: ({ html }) => utf8Bytes(html),
-});
-
-const isBodyEmpty = MessageBody.$match({
-  TextOnly: ({ text }) => !hasText(text),
-  HtmlOnly: ({ html }) => !hasText(html),
-  TextAndHtml: ({ text, html }) => !hasText(text) && !hasText(html),
 });
 
 export class SendPolicy extends Context.Service<
@@ -940,6 +1014,15 @@ export namespace SendPolicy {
   export type Config = SendPolicyConfig;
 }
 
+const SendPolicyInput = Schema.declare<typeof SendPolicy.Service>(
+  (input): input is typeof SendPolicy.Service => input !== undefined && input !== null,
+);
+
+const EmailInput = Schema.Struct({
+  send: EmailSendSchema,
+  policy: SendPolicyInput,
+});
+
 export class Email extends Context.Service<
   Email,
   {
@@ -948,6 +1031,9 @@ export class Email extends Context.Service<
 >()("@effect-email/Email") {
   static readonly layer = (input: typeof EmailInput.Type) => {
     const config = EmailInput.make(input);
-    return Email.of({ ...config });
+    return Email.of({
+      ...config,
+      send: (message) => config.policy.validate(message).pipe(Effect.flatMap(config.send)),
+    });
   };
 }

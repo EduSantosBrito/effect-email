@@ -9,17 +9,12 @@ const TestEmailInspectionInput = Schema.Struct({
   state: TestEmailInspectionState,
 });
 
-const SendPolicyInput = Schema.declare<typeof SendPolicy.Service>(
-  (input): input is typeof SendPolicy.Service => input !== undefined && input !== null,
-);
-
 const TestEmailInspectionServiceInput = Schema.declare<typeof TestEmailInspection.Service>(
   (input): input is typeof TestEmailInspection.Service => input !== undefined && input !== null,
 );
 
 const TestEmailAdapterInput = Schema.Struct({
   inspection: TestEmailInspectionServiceInput,
-  policy: SendPolicyInput,
 });
 
 export class TestEmailInspection extends Context.Service<
@@ -54,10 +49,11 @@ export class TestEmailAdapter extends Context.Service<
     return TestEmailAdapter.of({
       ...config,
       send: (message) =>
-        config.policy.validate(message).pipe(
-          Effect.tap((accepted) => config.inspection.record(accepted)),
-          Effect.as({ provider: "test", messageId: "test-message-id" } satisfies SendReceipt),
-        ),
+        config.inspection
+          .record(message)
+          .pipe(
+            Effect.as({ provider: "test", messageId: "test-message-id" } satisfies SendReceipt),
+          ),
     });
   };
 }
@@ -72,9 +68,8 @@ const testInspectionLayer = Layer.effect(
 const testEmailAdapterLayer = Layer.effect(
   TestEmailAdapter,
   Effect.gen(function* () {
-    const policy = yield* SendPolicy;
     const inspection = yield* TestEmailInspection;
-    return TestEmailAdapter.layer({ policy, inspection });
+    return TestEmailAdapter.layer({ inspection });
   }).pipe(Effect.annotateLogs({ service: "@effect-email/TestEmailAdapter" })),
 );
 
@@ -82,7 +77,8 @@ const testEmailLayer = Layer.effect(
   Email,
   Effect.gen(function* () {
     const adapter = yield* TestEmailAdapter;
-    return Email.layer(adapter);
+    const policy = yield* SendPolicy;
+    return Email.layer({ policy, send: adapter.send });
   }).pipe(Effect.annotateLogs({ service: "@effect-email/Email" })),
 ).pipe(Layer.provideMerge(testEmailAdapterLayer));
 
