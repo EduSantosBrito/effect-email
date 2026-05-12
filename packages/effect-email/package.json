@@ -36,6 +36,10 @@
       "types": "./dist/resend.d.ts",
       "import": "./dist/resend.js"
     },
+    "./smtp": {
+      "types": "./dist/smtp.d.ts",
+      "import": "./dist/smtp.js"
+    },
     "./test": {
       "types": "./dist/test.d.ts",
       "import": "./dist/test.js"
@@ -47,7 +51,7 @@
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "build": "rm -rf dist && bun build ./src/index.ts ./src/resend.ts ./src/test.ts --outdir ./dist --target bun --format esm --packages external && tsgo --emitDeclarationOnly",
+    "build": "rm -rf dist && bun build ./src/index.ts ./src/resend.ts ./src/smtp.ts ./src/test.ts --outdir ./dist --target bun --format esm --packages external && tsgo --emitDeclarationOnly",
     "check": "bun --bun tsgo --project tsconfig.check.json && bun run lint && bun run type-test",
     "format": "bun --bun oxfmt --write package.json tsconfig.json src",
     "format:check": "bun --bun oxfmt --check package.json tsconfig.json src",
@@ -60,13 +64,15 @@
     "prepare": "bun --bun effect-tsgo patch"
   },
   "dependencies": {
-    "effect": "^4.0.0-beta.64"
+    "effect": "^4.0.0-beta.64",
+    "nodemailer": "^8.0.7"
   },
   "devDependencies": {
     "@effect/language-service": "catalog:",
     "@effect/tsgo": "catalog:",
     "@effect/vitest": "catalog:",
     "@types/bun": "catalog:",
+    "@types/nodemailer": "^8.0.0",
     "@typescript/native-preview": "catalog:",
     "bun-types": "catalog:",
     "effect-rules": "catalog:",
