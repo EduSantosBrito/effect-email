@@ -918,4 +918,61 @@ describe("effect-email SMTP adapter", () => {
       ]);
     }),
   );
+
+  it.effect("maps regular and inline attachments through SMTP send", () =>
+    Effect.gen(function* () {
+      const seen = yield* Ref.make<readonly unknown[]>([]);
+      const transporter = {
+        sendMail: (options: unknown) =>
+          Ref.update(seen, (messages) => [...messages, options]).pipe(
+            Effect.as({ messageId: "<smtp-id@example.com>" }),
+            Effect.runPromise,
+          ),
+      };
+      const message = yield* makeMessage({
+        html: '<img src="cid:logo@example.com" alt="logo">',
+        attachments: [
+          {
+            name: "logo.png",
+            mediaType: "image/png",
+            content: new Uint8Array([1]),
+            contentId: "logo@example.com",
+          },
+          {
+            name: "report.txt",
+            mediaType: "text/plain",
+            content: new Uint8Array([104, 105]),
+          },
+        ],
+      });
+
+      yield* Effect.gen(function* () {
+        const email = yield* Email;
+        yield* email.send(message);
+      }).pipe(Effect.provide(provideSmtp(transporter)));
+
+      assert.deepStrictEqual(yield* Ref.get(seen), [
+        {
+          from: "Sender <sender@example.com>",
+          to: ["you@example.com"],
+          subject: "Hello",
+          text: "Plain",
+          html: '<img src="cid:logo@example.com" alt="logo">',
+          attachments: [
+            {
+              filename: "logo.png",
+              contentType: "image/png",
+              content: Buffer.from([1]),
+              cid: "logo@example.com",
+            },
+            {
+              filename: "report.txt",
+              contentType: "text/plain",
+              content: Buffer.from([104, 105]),
+            },
+          ],
+        },
+      ]);
+    }),
+  );
 });
