@@ -2,12 +2,15 @@ import nodemailer from "nodemailer";
 import type SMTPTransport from "nodemailer/lib/smtp-transport";
 import { Config, Context, Effect, Layer, Redacted, Schema } from "effect";
 import {
+  AuthenticationFailure,
   Email,
   type EmailMessage,
   ProviderProtocolFailure,
+  RejectedMessageFailure,
   type SendFailure,
   SendPolicy,
   type SendReceipt,
+  TransportUnavailableFailure,
 } from "./index";
 import { mailOptions, type SmtpMailOptions } from "./internal/smtp-mail-options";
 
@@ -54,6 +57,11 @@ const SmtpClientInput = Schema.Struct({
   transporter: SmtpTransporterInput,
 });
 
+type NodemailerErrorLike = {
+  readonly code?: unknown;
+  readonly responseCode?: unknown;
+};
+
 export class SmtpConfig extends Context.Service<
   SmtpConfig,
   {
@@ -86,9 +94,27 @@ export class SmtpClient extends Context.Service<
 const receiptFromInfo = (
   info: SMTPTransport.SentMessageInfo,
 ): Effect.Effect<SendReceipt, SendFailure> =>
-  typeof info.messageId === "string" && info.messageId.length > 0
+  typeof info.messageId === "string" && info.messageId.trim().length > 0
     ? Effect.succeed({ provider: "smtp", messageId: info.messageId })
     : Effect.fail(new ProviderProtocolFailure({ provider: "smtp", retryable: false }));
+
+const classifySmtpError = (error: unknown): SendFailure => {
+  const value: NodemailerErrorLike = typeof error === "object" && error !== null ? error : {};
+
+  if (value.responseCode === 535 || value.code === "EAUTH") {
+    return new AuthenticationFailure({ provider: "smtp", retryable: false });
+  }
+
+  if (
+    typeof value.responseCode === "number" &&
+    value.responseCode >= 400 &&
+    value.responseCode < 600
+  ) {
+    return new RejectedMessageFailure({ provider: "smtp", retryable: false });
+  }
+
+  return new TransportUnavailableFailure({ provider: "smtp", retryable: true });
+};
 
 const executeSmtpSend = (
   transporter: SmtpTransporter,
@@ -96,7 +122,7 @@ const executeSmtpSend = (
 ): Effect.Effect<SendReceipt, SendFailure> =>
   Effect.tryPromise({
     try: () => transporter.sendMail(mailOptions(message)),
-    catch: () => new ProviderProtocolFailure({ provider: "smtp", retryable: false }),
+    catch: classifySmtpError,
   }).pipe(Effect.flatMap(receiptFromInfo));
 
 export const policyConfig: SendPolicy.Config = SendPolicy.defaultConfig;
