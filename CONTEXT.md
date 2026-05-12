@@ -54,6 +54,13 @@ A named content part included with an **Email Message**.
 Caller-supplied in-memory bytes for an **Attachment**.
 _Avoid_: Attachment file path, attachment URL, base64 attachment string
 
+**Inline Attachment**:
+An **Attachment** with a validated **Content ID** that an **HTML Body** may reference using a `cid:` URL.
+
+**Content ID**:
+A strict ASCII identifier for an **Inline Attachment**.
+_Avoid_: Raw Content-ID header
+
 **Email Header**:
 A validated provider-neutral header field on an **Email Message** that is not controlled by addressing, content, MIME, authentication, or transport delivery semantics.
 _Avoid_: Raw header, provider header option
@@ -133,6 +140,13 @@ A deferred **Transport Adapter** for direct SMTP delivery, intentionally exclude
 - An **Attachment** contains **Attachment Content**, not a file path or URL for the SDK to read.
 - **Attachment Content** is raw bytes; base64 and MIME encoding are adapter concerns.
 - An **Attachment** declares a **Media Type**, not an arbitrary content-type string.
+- An **Inline Attachment** is still an **Attachment**; the **Content ID** only makes it referenceable from an **HTML Body**.
+- A **Content ID** is stored without angle brackets and adapters format it for their transport.
+- **Content ID** is a core **Attachment** field, not a **Provider-Specific Option**.
+- The v0 **Content ID** shape is the unbracketed RFC msg-id body: ASCII, non-empty, no whitespace, no control characters, no angle brackets, and exactly one `@`.
+- An **Inline Attachment** does not require the **HTML Body** to reference its **Content ID**.
+- An **Email Message** rejects duplicate **Content IDs** across **Attachments**.
+- The v0 **Inline Attachment** surface does not expose attachment disposition; adapters infer transport disposition from **Content ID** when needed.
 - An **Email Header** is allowed only when it does not override structured **Email Message** fields or transport-controlled behavior.
 - An **Email Header** has one **Email Header Name** and one **Email Header Value**.
 - An **Email Message** rejects duplicate **Email Header Names**.
