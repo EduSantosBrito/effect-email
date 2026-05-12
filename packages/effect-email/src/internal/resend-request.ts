@@ -7,6 +7,7 @@ const ResendAttachment = Schema.Struct({
   filename: Schema.String,
   content_type: Schema.String,
   content: Schema.String,
+  content_id: Schema.optionalKey(Schema.String),
 });
 
 const ResendRequestBody = Schema.Struct({
@@ -92,6 +93,7 @@ const toResendRequestBody = (message: EmailMessage): ResendRequestBody => ({
       filename: attachment.name,
       content_type: attachment.mediaType,
       content: encodeAttachment(attachment.content),
+      ...(attachment.contentId !== undefined ? { content_id: attachment.contentId } : {}),
     })),
   ),
   headers: Option.map(Option.fromUndefinedOr(message.headers), (headers) =>
