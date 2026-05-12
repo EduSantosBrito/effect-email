@@ -50,12 +50,13 @@ _Avoid_: Core field
 **Attachment**:
 A named content part included with an **Email Message**.
 
+**Inline Attachment**:
+An **Attachment** with a validated **Content ID** that an **HTML Body** may reference using a `cid:` URL.
+_Avoid_: Provider-specific inline option
+
 **Attachment Content**:
 Caller-supplied in-memory bytes for an **Attachment**.
 _Avoid_: Attachment file path, attachment URL, base64 attachment string
-
-**Inline Attachment**:
-An **Attachment** with a validated **Content ID** that an **HTML Body** may reference using a `cid:` URL.
 
 **Content ID**:
 A strict ASCII identifier for an **Inline Attachment**.
@@ -205,7 +206,7 @@ A deferred **Transport Adapter** for direct SMTP delivery, intentionally exclude
 > **Dev:** "Can the same Email Header Name appear twice?"
 > **Domain expert:** "No, not yet. Resend maps headers as an object, so duplicates are rejected until a provider-neutral duplicate-header story exists."
 
-> **Dev:** "Can users set From, Subject, Message-ID, DKIM-Signature, or Resend-* through Email Headers?"
+> **Dev:** "Can users set From, Subject, Message-ID, DKIM-Signature, or Resend-\* through Email Headers?"
 > **Domain expert:** "No. Those are structured, MIME, authentication, delivery, or provider-reserved fields, not user Email Headers."
 
 > **Dev:** "Should Email Header Names be lowercased in stored messages?"

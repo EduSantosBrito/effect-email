@@ -4,6 +4,7 @@ const addressPattern =
   /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
 const mediaTypePattern =
   /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*(?:\s*;\s*[A-Za-z0-9!#$&^_.+-]+=[A-Za-z0-9!#$&^_.+-]+)*$/;
+const contentIdPattern = /^[^\s<>@]+@[^\s<>@]+$/u;
 const headerNamePattern = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 const forbiddenHeaderNames = new Set([
   "bcc",
@@ -50,6 +51,20 @@ export const MediaType = Schema.String.check(Schema.isPattern(mediaTypePattern))
   Schema.brand("MediaType"),
 );
 export type MediaType = typeof MediaType.Type;
+export const ContentId = Schema.String.check(
+  Schema.isNonEmpty(),
+  Schema.isPattern(contentIdPattern),
+  Schema.makeFilter(
+    (value: string) => [...value].every((character) => character.charCodeAt(0) < 128),
+    {
+      expected: "an ASCII content ID",
+    },
+  ),
+  Schema.makeFilter((value: string) => !hasControlCharacter(value), {
+    expected: "a content ID with no control characters",
+  }),
+).pipe(Schema.brand("ContentId"));
+export type ContentId = typeof ContentId.Type;
 export const EmailHeaderName = Schema.String.check(
   Schema.isNonEmpty(),
   Schema.isPattern(headerNamePattern),
@@ -105,6 +120,7 @@ export interface Attachment {
   readonly name: string;
   readonly mediaType: MediaType;
   readonly content: Uint8Array;
+  readonly contentId?: ContentId;
 }
 
 export interface EmailHeader {
@@ -198,6 +214,7 @@ export const AttachmentInput = Schema.Struct({
   name: Schema.Unknown,
   mediaType: Schema.Unknown,
   content: Schema.Unknown,
+  contentId: Schema.optional(Schema.Unknown),
   path: Schema.optional(Schema.Unknown),
   url: Schema.optional(Schema.Unknown),
   base64: Schema.optional(Schema.Unknown),
@@ -252,6 +269,7 @@ export class MessageContentValidationFailure extends Schema.TaggedErrorClass<Mes
       "InvalidAttachmentName",
       "InvalidMediaType",
       "InvalidAttachmentContent",
+      "InvalidContentId",
     ]),
   },
 ) {}
@@ -282,6 +300,7 @@ export class EmailMessageValidationFailure extends Schema.TaggedErrorClass<Email
       "InvalidAttachmentName",
       "InvalidMediaType",
       "InvalidAttachmentContent",
+      "InvalidContentId",
       "InvalidHeaderName",
       "ForbiddenHeaderName",
       "DuplicateHeaderName",
@@ -388,6 +407,7 @@ const EmailSendSchema = Schema.declare<EmailSend>(
 const decodeEmailAddress = Schema.decodeUnknownEffect(EmailAddress);
 const decodeDisplayName = Schema.decodeUnknownEffect(DisplayName);
 const decodeMediaType = Schema.decodeUnknownEffect(MediaType);
+const decodeContentId = Schema.decodeUnknownEffect(ContentId);
 const decodeEmailHeaderName = Schema.decodeUnknownEffect(EmailHeaderName);
 const decodeEmailHeaderValue = Schema.decodeUnknownEffect(EmailHeaderValue);
 const decodeSubject = Schema.decodeUnknownEffect(Subject);
@@ -641,12 +661,22 @@ const parseAttachment: (
     if (!(raw.content instanceof Uint8Array)) {
       return yield* new MessageContentValidationFailure({ reason: "InvalidAttachmentContent" });
     }
+    const contentIdInput = optionalValue(raw.contentId);
+    const contentId =
+      contentIdInput === undefined
+        ? undefined
+        : yield* decodeContentId(contentIdInput).pipe(
+            Effect.mapError(
+              () => new MessageContentValidationFailure({ reason: "InvalidContentId" }),
+            ),
+          );
     return {
       name: raw.name,
       mediaType: yield* decodeMediaType(raw.mediaType.toLowerCase()).pipe(
         Effect.mapError(() => new MessageContentValidationFailure({ reason: "InvalidMediaType" })),
       ),
       content: raw.content,
+      ...(contentId !== undefined ? { contentId } : {}),
     };
   },
 );

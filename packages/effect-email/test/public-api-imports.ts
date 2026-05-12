@@ -2,6 +2,7 @@ import {
   Attachment,
   AttachmentInput,
   AuthenticationFailure,
+  ContentId,
   DisplayName,
   Email,
   EmailAddress,
@@ -34,6 +35,7 @@ import {
   TextBody,
   type Attachment as AttachmentShape,
   type AttachmentInput as AttachmentInputShape,
+  type ContentId as ContentIdShape,
   type DisplayName as DisplayNameShape,
   type EmailAddress as EmailAddressShape,
   type EmailHeader as EmailHeaderShape,
@@ -83,6 +85,7 @@ type PublicApiContract = {
     | typeof Attachment
     | typeof AttachmentInput
     | typeof AuthenticationFailure
+    | typeof ContentId
     | typeof DisplayName
     | typeof Email
     | typeof EmailAddress
@@ -115,6 +118,7 @@ type PublicApiContract = {
     | typeof TextBody
     | AttachmentShape
     | AttachmentInputShape
+    | ContentIdShape
     | DisplayNameShape
     | EmailAddressShape
     | EmailHeaderShape
