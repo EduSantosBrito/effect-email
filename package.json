@@ -16,7 +16,7 @@
       "@typescript/native-preview": "latest",
       "bun-types": "1.3.13",
       "effect": "^4.0.0-beta.64",
-      "effect-rules": "^0.3.2",
+      "effect-rules": "^0.3.3",
       "knip": "^5.69.1",
       "oxfmt": "^0.48.0",
       "oxlint": "^1.63.0",
