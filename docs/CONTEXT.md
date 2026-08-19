@@ -181,18 +181,20 @@ _Avoid_: Public root client
 - The deprecated `retryable` compatibility field is true only for retryable disposition and false for permanent and ambiguous dispositions.
 - **Send Failure Metadata** is optional and allowlisted; it never exposes raw bodies, generic headers, causes, credentials, or **Email PII**.
 - Defects and fiber interruption remain outside the **Send Failure** channel.
-- The first **SMTP Adapter** slice maps Nodemailer errors into the existing **Send Failure** classes instead of adding SMTP-specific public error types.
-- **SMTP Failure Mapping** treats authentication errors as **AuthenticationFailure**, recipient or message rejection as **RejectedMessageFailure**, connection, TLS, and timeout problems as **TransportUnavailableFailure**, and malformed transport responses as **ProviderProtocolFailure**.
+- The **SMTP Adapter** maps Nodemailer errors into the existing **Send Failure** classes instead of adding SMTP-specific public error types.
+- **SMTP Failure Mapping** treats authentication errors as permanent **AuthenticationFailure**.
+- **SMTP Failure Mapping** treats SMTP 4xx rejection as retryable **TransportUnavailableFailure** when non-acceptance is known, and SMTP 5xx rejection other than authentication as permanent **RejectedMessageFailure**.
+- **SMTP Failure Mapping** treats connection, TLS, and timeout failures as retryable **TransportUnavailableFailure** only when they are known to occur before DATA.
+- **SMTP Failure Mapping** treats failures during or after DATA, failures with an unknown command or phase, and resolved sends without a valid **SMTP Message ID** as **Ambiguous Send Failures**.
 - The **SMTP Adapter** returns `provider: "smtp"` in its **Send Receipt**.
 - The **SMTP Adapter** uses the transport-reported **SMTP Message ID** as the **Send Receipt** message ID.
 - An **SMTP Message ID** is not proof of recipient delivery and is not a duplicate-send prevention key.
 - The SDK does not retry sending automatically because retries can cause a **Duplicate Send**.
-- SDK-authored telemetry does not include **Email PII** by default.
-- The MVP includes a **Resend Adapter** and a **Test Adapter**.
-- The MVP excludes the **SMTP Adapter** because direct SMTP has larger security and protocol surface area.
-- The next provider-neutral package step is an **SMTP Adapter** using the current **Email Message** surface only.
-- The first **SMTP Adapter** slice must support the whole current **Email Message** surface: text body, HTML body, attachments, inline attachments, and **Email Headers**.
-- A second real **Transport Adapter** should prove the core contract before adding provider-shaped capabilities such as tags, scheduling, templates, webhooks, or provider metadata.
+- SDK-authored telemetry does not include **Email PII**.
+- The supported **Transport Adapters** are the **Resend Adapter**, **SMTP Adapter**, and **Test Adapter**.
+- The **SMTP Adapter** is supported in Node and excluded from the Cloudflare Workers compatibility promise.
+- The **SMTP Adapter** supports the whole current **Email Message** surface: text body, HTML body, attachments, inline attachments, and **Email Headers**.
+- The second real **Transport Adapter** proves the core contract before provider-shaped capabilities such as tags, scheduling, templates, webhooks, or provider metadata are added.
 - The **SMTP Adapter** subpath is named for the provider-neutral capability (`effect-email/smtp`), not the implementation library.
 - The **SMTP Adapter** is implemented with Nodemailer because SMTP protocol maturity is more important than TypeScript-native internals.
 - The **SMTP Adapter** exports an **SMTP Client Service** from `effect-email/smtp` for testability and custom Layer composition.
@@ -244,8 +246,8 @@ _Avoid_: Public root client
 
 ## Example Dialogue
 
-> **Dev:** "Should v0 include an SMTP layer?"
-> **Domain expert:** "No. The MVP should prove the Effect service and adapter shape with Resend and testing support first. SMTP comes later."
+> **Dev:** "Does the package include an SMTP Adapter?"
+> **Domain expert:** "Yes. The SMTP Adapter is supported through `effect-email/smtp` in Node, but not in Cloudflare Workers."
 
 > **Dev:** "Can the core send type expose Resend-only fields?"
 > **Domain expert:** "No. The core message must stay provider-neutral so adapter swapping stays meaningful."
@@ -275,7 +277,7 @@ _Avoid_: Public root client
 > **Domain expert:** "No. It identifies the accepted message but is not delivery proof or a dedupe key."
 
 > **Dev:** "Can users inspect the raw Resend error body?"
-> **Domain expert:** "No, not by default. Send failures expose classified, safe details because raw provider bodies can leak email content or addresses."
+> **Domain expert:** "No. Send failures expose classified, safe details because raw provider bodies can leak email content or addresses."
 
 > **Dev:** "Should the first SMTP Adapter expose Nodemailer errors directly?"
 > **Domain expert:** "No. Map them into the existing Send Failure classes unless the provider-neutral taxonomy proves insufficient."
@@ -326,7 +328,7 @@ _Avoid_: Public root client
 > **Domain expert:** "No. Users opt into retries explicitly because retrying can create duplicate sends."
 
 > **Dev:** "Does Effect tracing mean we can log message details?"
-> **Domain expert:** "No. Effect traces should identify operations, while SDK annotations and logs avoid Email PII by default."
+> **Domain expert:** "No. Effect traces should identify operations, while SDK annotations and logs exclude Email PII."
 
 > **Dev:** "What happens when an email address is invalid?"
 > **Domain expert:** "Decoding fails in Effect; constructors should not throw in the secure path."
@@ -349,8 +351,8 @@ _Avoid_: Public root client
 > **Dev:** "Does passing an Idempotency Key make an SMTP retry safe?"
 > **Domain expert:** "No. SMTP accepts the common Send Options shape but does not deduplicate or translate the key into Message-ID or an Email Header."
 
-> **Dev:** "Should the next package step add an SMTP Adapter?"
-> **Domain expert:** "Yes. Add an SMTP Adapter using the current Email Message surface only, so a second real transport proves the core contract before new message capabilities are added."
+> **Dev:** "Is the SMTP Adapter available in Cloudflare Workers?"
+> **Domain expert:** "No. `effect-email/smtp` is Node-only; the root, Resend, and Test entrypoints carry the Workers compatibility promise."
 
 > **Dev:** "Can the first SMTP Adapter skip attachments or Email Headers?"
 > **Domain expert:** "No. Current core surface means text, HTML, attachments, inline attachments, and Email Headers."

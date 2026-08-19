@@ -3,6 +3,7 @@ import {
   AmbiguousSendFailure,
   Email,
   type EmailMessage,
+  type IdempotencyKey,
   RateLimitFailure,
   RejectedMessageFailure,
   type RetryAfter,
@@ -37,7 +38,7 @@ interface TestEmailState {
   readonly script: readonly TestEmailOutcome[];
   readonly attempts: readonly TestEmailAttempt[];
   readonly accepted: readonly EmailMessage[];
-  readonly deduplication: ReadonlyMap<string, DeduplicationEntry>;
+  readonly deduplication: ReadonlyMap<IdempotencyKey, DeduplicationEntry>;
   readonly nextReceiptId: number;
 }
 
@@ -85,16 +86,31 @@ export class TestEmailInspection extends Context.Service<
 >()("@effect-email/TestEmailInspection") {
   static readonly layer = (input: { readonly state: Ref.Ref<readonly EmailMessage[]> }) => {
     const accepted = Ref.get(input.state);
-    return TestEmailInspection.of({
+    return makeInspection({
       attempts: accepted.pipe(Effect.map((messages) => messages.map((message) => ({ message })))),
       accepted,
-      sent: accepted,
-      takeSent: Ref.getAndSet(input.state, []),
-      clear: Ref.set(input.state, []),
+      takeAccepted: Ref.getAndSet(input.state, []),
+      clearAccepted: Ref.set(input.state, []),
       record: (message) => Ref.update(input.state, (messages) => [...messages, message]),
     });
   };
 }
+
+const makeInspection = (input: {
+  readonly attempts: Effect.Effect<readonly TestEmailAttempt[]>;
+  readonly accepted: Effect.Effect<readonly EmailMessage[]>;
+  readonly takeAccepted: Effect.Effect<readonly EmailMessage[]>;
+  readonly clearAccepted: Effect.Effect<void>;
+  readonly record: (message: EmailMessage) => Effect.Effect<void>;
+}): typeof TestEmailInspection.Service =>
+  TestEmailInspection.of({
+    attempts: input.attempts,
+    accepted: input.accepted,
+    sent: input.accepted,
+    takeSent: input.takeAccepted,
+    clear: input.clearAccepted,
+    record: input.record,
+  });
 
 export class TestEmailControl extends Context.Service<
   TestEmailControl,
@@ -137,12 +153,14 @@ const testInspectionLayer = Layer.effect(
   Effect.gen(function* () {
     const { state } = yield* TestEmailStateService;
     const accepted = Ref.get(state).pipe(Effect.map((current) => current.accepted));
-    return TestEmailInspection.of({
+    return makeInspection({
       attempts: Ref.get(state).pipe(Effect.map((current) => current.attempts)),
       accepted,
-      sent: accepted,
-      takeSent: Ref.modify(state, (current) => [current.accepted, { ...current, accepted: [] }]),
-      clear: Ref.update(state, (current) => ({ ...current, accepted: [] })),
+      takeAccepted: Ref.modify(state, (current) => [
+        current.accepted,
+        { ...current, accepted: [] },
+      ]),
+      clearAccepted: Ref.update(state, (current) => ({ ...current, accepted: [] })),
       record: (message) =>
         Ref.update(state, (current) => ({
           ...current,
