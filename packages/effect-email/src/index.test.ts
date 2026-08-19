@@ -6,11 +6,13 @@ import {
   Exit,
   Fiber,
   Layer,
+  Logger,
   Predicate,
   Redacted,
   Ref,
   Result,
   Schema,
+  Tracer,
 } from "effect";
 import {
   HttpClient,
@@ -130,6 +132,27 @@ const provideSmtp = (
     Layer.provide(Layer.succeed(Smtp.SmtpClient)(Smtp.SmtpClient.layer({ transporter }))),
     Layer.provide(policy),
   );
+
+const captureTelemetry = <A, E, R>(effect: Effect.Effect<A, E, R>) => {
+  const spans: Tracer.NativeSpan[] = [];
+  const logs: Array<ReturnType<typeof Logger.formatStructured.log>> = [];
+  const tracer = Tracer.make({
+    span: (options) => {
+      const span = new Tracer.NativeSpan(options);
+      spans.push(span);
+      return span;
+    },
+  });
+  const logger = Logger.make<unknown, void>((options) => {
+    logs.push(Logger.formatStructured.log(options));
+  });
+  return effect.pipe(
+    Effect.provideService(Tracer.Tracer, tracer),
+    Effect.provide(Logger.layer([logger])),
+    Effect.exit,
+    Effect.map((exit) => ({ exit, logs, spans })),
+  );
+};
 
 describe("effect-email send attempt contracts", () => {
   it.effect("parses Idempotency Keys and Send Options at their public boundary", () =>
@@ -329,6 +352,226 @@ describe("effect-email send attempt contracts", () => {
 
       assert.ok(Exit.hasDies(yield* defecting.send(message).pipe(Effect.exit)));
       assert.ok(Exit.hasInterrupts(yield* interrupted.send(message).pipe(Effect.exit)));
+    }),
+  );
+
+  it.effect("creates one public send span with only low-cardinality outcome attributes", () =>
+    Effect.gen(function* () {
+      const message = yield* makeMessage({ to: ["one@example.com", "two@example.com"] });
+      const cases = [
+        {
+          email: Email.layer({
+            policy: SendPolicy.defaultLayer,
+            send: () => Effect.succeed({ provider: "test", messageId: "receipt-private-id" }),
+          }),
+          expected: {
+            "effect_email.provider": "test",
+            "effect_email.outcome": "accepted",
+          },
+        },
+        {
+          email: Email.layer({
+            policy: SendPolicy.defaultLayer,
+            send: () =>
+              Effect.fail(
+                new RejectedMessageFailure({
+                  provider: "test",
+                  metadata: { status: 422 },
+                  disposition: "permanent",
+                  retryable: false,
+                }),
+              ),
+          }),
+          expected: {
+            "effect_email.provider": "test",
+            "effect_email.outcome": "permanent_failure",
+            "effect_email.failure_type": "RejectedMessageFailure",
+            "http.response.status_code": 422,
+          },
+        },
+        {
+          email: Email.layer({
+            policy: SendPolicy.defaultLayer,
+            send: () =>
+              Effect.fail(
+                new RateLimitFailure({
+                  provider: "test",
+                  metadata: { status: 429 },
+                  disposition: "retryable",
+                  retryable: true,
+                }),
+              ),
+          }),
+          expected: {
+            "effect_email.provider": "test",
+            "effect_email.outcome": "retryable_failure",
+            "effect_email.failure_type": "RateLimitFailure",
+            "http.response.status_code": 429,
+          },
+        },
+        {
+          email: Email.layer({
+            policy: SendPolicy.defaultLayer,
+            send: () =>
+              Effect.fail(
+                new AmbiguousSendFailure({
+                  provider: "test",
+                  metadata: { status: 202 },
+                  disposition: "ambiguous",
+                  retryable: false,
+                }),
+              ),
+          }),
+          expected: {
+            "effect_email.provider": "test",
+            "effect_email.outcome": "ambiguous_failure",
+            "effect_email.failure_type": "AmbiguousSendFailure",
+            "http.response.status_code": 202,
+          },
+        },
+        {
+          email: Email.layer({
+            policy: SendPolicy.layer({ maxRecipients: 1 }),
+            send: () => Effect.succeed({ provider: "test", messageId: "not-sent" }),
+          }),
+          expected: {
+            "effect_email.outcome": "permanent_failure",
+            "effect_email.failure_type": "SendPolicyViolation",
+          },
+        },
+      ];
+
+      for (const telemetryCase of cases) {
+        const capture = yield* captureTelemetry(telemetryCase.email.send(message));
+        const sdkSpans = capture.spans.filter((span) => span.name === "effect-email.send");
+        assert.strictEqual(sdkSpans.length, 1);
+        assert.deepStrictEqual(
+          Object.fromEntries(sdkSpans[0]?.attributes ?? []),
+          telemetryCase.expected,
+        );
+      }
+    }),
+  );
+
+  it.effect("does not author Email PII, secrets, or high-cardinality identifiers", () =>
+    Effect.gen(function* () {
+      const attachmentContent = new TextEncoder().encode("attachment-private-content");
+      const message = yield* makeMessage({
+        from: "Private Sender <private-sender@example.com>",
+        to: "private-to@example.com",
+        cc: "private-cc@example.com",
+        bcc: "private-bcc@example.com",
+        replyTo: "private-reply@example.com",
+        subject: "private-subject",
+        text: "private-text-body",
+        html: "<p>private-html-body</p>",
+        headers: { "X-Private-Header": "private-header-value" },
+        attachments: {
+          name: "private-attachment.txt",
+          mediaType: "text/plain",
+          content: attachmentContent,
+          contentId: "private-content@example.com",
+        },
+      });
+      const options = yield* SendOptions.make({ idempotencyKey: "private-idempotency-key" });
+      const providerSecret = "private-provider-secret";
+      const providerPayload = "private-provider-payload";
+      const accepted = Email.layer({
+        policy: SendPolicy.defaultLayer,
+        send: () =>
+          Effect.sync(() => providerSecret.length + providerPayload.length).pipe(
+            Effect.as({ provider: "test", messageId: "private-receipt-id" }),
+          ),
+      });
+      const failed = Email.layer({
+        policy: SendPolicy.defaultLayer,
+        send: () =>
+          Effect.fail(
+            new RateLimitFailure({
+              provider: "test",
+              metadata: {
+                status: 429,
+                retryAfter: RetryAfterVariants.DelaySeconds({ seconds: 37 }),
+                requestId: "private-request-id",
+              },
+              disposition: "retryable",
+              retryable: true,
+            }),
+          ),
+      });
+
+      const acceptedCapture = yield* captureTelemetry(accepted.send(message, options));
+      const failedCapture = yield* captureTelemetry(failed.send(message, options));
+      const authoredTelemetry = JSON.stringify({
+        attributes: [...acceptedCapture.spans, ...failedCapture.spans].map((span) => [
+          ...span.attributes,
+        ]),
+        events: [...acceptedCapture.spans, ...failedCapture.spans].flatMap((span) => span.events),
+        logs: [...acceptedCapture.logs, ...failedCapture.logs],
+      });
+      const forbiddenValues = [
+        "Private Sender",
+        "private-sender@example.com",
+        "private-to@example.com",
+        "private-cc@example.com",
+        "private-bcc@example.com",
+        "private-reply@example.com",
+        "private-subject",
+        "private-text-body",
+        "private-html-body",
+        "X-Private-Header",
+        "private-header-value",
+        "private-attachment.txt",
+        "private-content@example.com",
+        "private-idempotency-key",
+        "private-receipt-id",
+        "private-request-id",
+        providerSecret,
+        providerPayload,
+        Array.from(attachmentContent).join(","),
+      ];
+
+      assert.deepStrictEqual(acceptedCapture.logs, []);
+      assert.deepStrictEqual(failedCapture.logs, []);
+      for (const forbiddenValue of forbiddenValues) {
+        assert.ok(!authoredTelemetry.includes(forbiddenValue));
+      }
+    }),
+  );
+
+  it.effect("preserves defect and interruption span termination without invented outcomes", () =>
+    Effect.gen(function* () {
+      const message = yield* makeMessage();
+      const cases = [
+        {
+          email: Email.layer({
+            policy: SendPolicy.defaultLayer,
+            send: () => Effect.failCause(Cause.die("adapter defect")),
+          }),
+          hasExpectedCause: Exit.hasDies,
+        },
+        {
+          email: Email.layer({
+            policy: SendPolicy.defaultLayer,
+            send: () => Effect.interrupt,
+          }),
+          hasExpectedCause: Exit.hasInterrupts,
+        },
+      ];
+
+      for (const telemetryCase of cases) {
+        const capture = yield* captureTelemetry(telemetryCase.email.send(message));
+        const sdkSpans = capture.spans.filter((span) => span.name === "effect-email.send");
+        assert.strictEqual(sdkSpans.length, 1);
+        const span = sdkSpans[0];
+        assert.ok(span);
+        assert.ok(Predicate.isTagged(span.status, "Ended"));
+        if (Predicate.isTagged(span.status, "Ended")) {
+          assert.ok(telemetryCase.hasExpectedCause(span.status.exit));
+        }
+        assert.deepStrictEqual(Object.fromEntries(span.attributes), {});
+        assert.deepStrictEqual(capture.logs, []);
+      }
     }),
   );
 });

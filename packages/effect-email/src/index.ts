@@ -1,4 +1,4 @@
-import { Context, Data, DateTime, Effect, Match, Option, Schema } from "effect";
+import { Context, Data, DateTime, Effect, Match, Option, Predicate, Schema } from "effect";
 
 const addressPattern =
   /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
@@ -507,6 +507,27 @@ export type SendFailure =
   | TransportUnavailableFailure
   | ProviderProtocolFailure
   | AmbiguousSendFailure;
+
+const annotateAcceptedSend = (receipt: SendReceipt): Effect.Effect<void> =>
+  Effect.annotateCurrentSpan({
+    "effect_email.provider": receipt.provider,
+    "effect_email.outcome": "accepted",
+  });
+
+const annotateFailedSend = (failure: SendFailure): Effect.Effect<void> => {
+  const attributes: Record<string, unknown> = {
+    "effect_email.outcome": `${failure.disposition}_failure`,
+    "effect_email.failure_type": failure._tag,
+  };
+  if (Predicate.isTagged(failure, "SendPolicyViolation")) {
+    return Effect.annotateCurrentSpan(attributes);
+  }
+  attributes["effect_email.provider"] = failure.provider;
+  if (failure.metadata?.status !== undefined) {
+    attributes["http.response.status_code"] = failure.metadata.status;
+  }
+  return Effect.annotateCurrentSpan(attributes);
+};
 
 const SendPolicyLimit = Schema.Number.check(
   Schema.isFinite(),
@@ -1242,9 +1263,12 @@ export class Email extends Context.Service<
     return Email.of({
       ...config,
       send: (message, options) =>
-        config.policy
-          .validate(message)
-          .pipe(Effect.flatMap((validatedMessage) => config.send(validatedMessage, options))),
+        config.policy.validate(message).pipe(
+          Effect.flatMap((validatedMessage) => config.send(validatedMessage, options)),
+          Effect.tap(annotateAcceptedSend),
+          Effect.tapError(annotateFailedSend),
+          Effect.withSpan("effect-email.send"),
+        ),
     });
   };
 }
