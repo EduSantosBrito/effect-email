@@ -16,9 +16,12 @@ By participating, you agree to follow the [Code of Conduct](./CODE_OF_CONDUCT.md
 
 ```sh
 bun install
-bun run check
-bun run test
-bun run build
+```
+
+Before opening a pull request, run the same reproducible readiness gate used by CI:
+
+```sh
+bun run ready
 ```
 
 ## Pull Requests
