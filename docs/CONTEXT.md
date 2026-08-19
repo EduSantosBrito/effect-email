@@ -1,0 +1,343 @@
+# Effect Email
+
+Effect Email is a TypeScript SDK for sending email through Effect services and Layers while keeping transport-specific behavior behind adapters.
+
+## Language
+
+**Email Message**:
+A provider-neutral typed request to send one email with sender, recipients, reply-to, subject, text or HTML content, and attachments.
+
+**Mailbox**:
+A structured email identity made from an email address and an optional display name.
+Raw mailbox strings are accepted only at constructor boundaries such as `Mailbox.make` and `EmailMessage.make`; stored domain state is always structured.
+_Avoid_: Raw mailbox string as stored domain state
+
+**Email Address**:
+A strict ASCII mailbox address used inside a **Mailbox**.
+_Avoid_: Internationalized email address, quoted local part, comment syntax
+
+**Display Name**:
+Unicode-safe user-facing text attached to a **Mailbox**.
+_Avoid_: Raw header text
+
+**Email Service**:
+The application-facing capability for sending an **Email Message**.
+_Avoid_: Client
+
+**Email Layer**:
+An Effect Layer that provides the **Email Service** using a **Transport Adapter**.
+_Avoid_: Client factory
+
+**Transport Adapter**:
+A provider-specific implementation of the **Email Service**.
+_Avoid_: Provider layer, driver
+
+**Resend Adapter**:
+The MVP **Transport Adapter** that sends email through Resend over HTTP.
+
+**Provider Secret**:
+A redacted credential used by a **Transport Adapter** to authenticate with its provider.
+_Avoid_: API key string
+
+**SMTP Credential**:
+A redacted **Provider Secret** used by the **SMTP Adapter** to authenticate with an SMTP server.
+_Avoid_: SMTP password string
+
+**SMTP Password Authentication**:
+The first **SMTP Adapter** authentication mode, using a username and redacted **SMTP Credential**.
+_Avoid_: OAuth2, token refresh
+
+**SMTP Secure Mode**:
+The **SMTP Adapter** setting for implicit TLS on connection, not a guarantee that STARTTLS is disabled.
+_Avoid_: No TLS flag
+
+**SMTP Connection Settings**:
+The minimal non-secret connection configuration for the first **SMTP Adapter** slice: host, port, and **SMTP Secure Mode**.
+_Avoid_: Nodemailer options bag
+
+**Trusted Runtime**:
+A server-side environment where **Provider Secrets** can be used without exposing them to end users.
+_Avoid_: Browser provider adapter
+
+**Provider-Specific Option**:
+A transport-only setting that is not part of the provider-neutral **Email Message** contract.
+_Avoid_: Core field
+
+**Attachment**:
+A named content part included with an **Email Message**.
+
+**Inline Attachment**:
+An **Attachment** with a validated **Content ID** that an **HTML Body** may reference using a `cid:` URL.
+_Avoid_: Provider-specific inline option
+
+**Attachment Content**:
+Caller-supplied in-memory bytes for an **Attachment**.
+_Avoid_: Attachment file path, attachment URL, base64 attachment string
+
+**Content ID**:
+A strict ASCII identifier for an **Inline Attachment**.
+_Avoid_: Raw Content-ID header
+
+**Email Header**:
+A validated provider-neutral header field on an **Email Message** that is not controlled by addressing, content, MIME, authentication, or transport delivery semantics.
+_Avoid_: Raw header, provider header option
+
+**Email Header Name**:
+A strict ASCII token identifying an **Email Header**.
+_Avoid_: Header line, colon-prefixed name
+
+**Email Header Value**:
+A single-line text value for an **Email Header**.
+_Avoid_: Folded header value, multi-line header value
+
+**Media Type**:
+A parsed MIME type that identifies **Attachment Content**.
+_Avoid_: Content-type string
+
+**Parsed Email Field**:
+A security-sensitive email value that has been decoded and validated before an **Email Message** is sent.
+_Avoid_: Raw string
+
+**HTML Body**:
+Caller-owned HTML content included in an **Email Message** without SDK sanitization.
+
+**Test Adapter**:
+A **Transport Adapter** used by tests to inspect requested email sends through Effect state without contacting an external provider.
+
+**Send Receipt**:
+Proof that a **Transport Adapter** accepted an **Email Message** for delivery.
+_Avoid_: Delivery receipt
+
+**SMTP Message ID**:
+The message identifier reported by the **SMTP Adapter** after provider acceptance.
+_Avoid_: Delivery proof, dedupe key
+
+**Send Failure**:
+A classified failure that prevented a **Transport Adapter** from accepting an **Email Message**.
+_Avoid_: Raw provider error
+
+**SMTP Failure Mapping**:
+Classification of Nodemailer failures into the existing provider-neutral **Send Failure** taxonomy.
+_Avoid_: Raw Nodemailer error
+
+**Duplicate Send**:
+An unintended second acceptance of the same **Email Message** by a transport.
+
+**Email PII**:
+Message data that can identify a sender, recipient, subject, body, attachment name, or provider payload.
+
+**Send Policy**:
+Configurable local limits that constrain an **Email Message** before it reaches a **Transport Adapter**.
+_Avoid_: Provider-only validation
+
+**SMTP Adapter**:
+A provider-neutral **Transport Adapter** for direct SMTP delivery, exposed as `effect-email/smtp`, implemented with Nodemailer, and using the existing **Email Message** surface before new message capabilities are added.
+_Avoid_: Nodemailer adapter
+
+**SMTP Client Service**:
+The subpath-local Effect service that performs SMTP sends for the **SMTP Adapter**.
+_Avoid_: Public root client
+
+## Relationships
+
+- An **Email Service** sends **Email Messages** through exactly one **Transport Adapter** at runtime.
+- An **Email Layer** provides the **Email Service** to an Effect program.
+- An **Email Message** uses **Mailboxes** for sender, recipients, and reply-to.
+- A **Mailbox** contains an **Email Address** and optional display name.
+- A **Display Name** allows Unicode text but rejects header-control characters and raw mailbox delimiters.
+- The MVP **Email Address** syntax is strict ASCII addr-spec only.
+- An **Email Message** has at least one recipient across to, cc, and bcc.
+- An **Email Message** rejects duplicate recipients across to, cc, and bcc.
+- Sending an **Email Message** returns a **Send Receipt** when the transport accepts it.
+- Sending an **Email Message** can fail with a **Send Failure**.
+- The first **SMTP Adapter** slice maps Nodemailer errors into the existing **Send Failure** classes instead of adding SMTP-specific public error types.
+- **SMTP Failure Mapping** treats authentication errors as **AuthenticationFailure**, recipient or message rejection as **RejectedMessageFailure**, connection, TLS, and timeout problems as **TransportUnavailableFailure**, and malformed transport responses as **ProviderProtocolFailure**.
+- The **SMTP Adapter** returns `provider: "smtp"` in its **Send Receipt**.
+- The **SMTP Adapter** uses the transport-reported **SMTP Message ID** as the **Send Receipt** message ID.
+- An **SMTP Message ID** is not proof of recipient delivery and is not a duplicate-send prevention key.
+- The SDK does not retry sending automatically because retries can cause a **Duplicate Send**.
+- SDK-authored telemetry does not include **Email PII** by default.
+- The MVP includes a **Resend Adapter** and a **Test Adapter**.
+- The MVP excludes the **SMTP Adapter** because direct SMTP has larger security and protocol surface area.
+- The next provider-neutral package step is an **SMTP Adapter** using the current **Email Message** surface only.
+- The first **SMTP Adapter** slice must support the whole current **Email Message** surface: text body, HTML body, attachments, inline attachments, and **Email Headers**.
+- A second real **Transport Adapter** should prove the core contract before adding provider-shaped capabilities such as tags, scheduling, templates, idempotency keys, webhooks, or provider metadata.
+- The **SMTP Adapter** subpath is named for the provider-neutral capability (`effect-email/smtp`), not the implementation library.
+- The **SMTP Adapter** is implemented with Nodemailer because SMTP protocol maturity is more important than TypeScript-native internals.
+- The **SMTP Adapter** exports an **SMTP Client Service** from `effect-email/smtp` for testability and custom Layer composition.
+- The **SMTP Client Service** is not exported from the provider-neutral root API.
+- A **Test Adapter** exposes sent **Email Messages** for assertions without global state.
+- A **Provider-Specific Option** does not belong in the core **Email Message** contract.
+- A **Provider Secret** is supplied as redacted Effect configuration, not as a plain string.
+- A provider-backed **Transport Adapter** runs only in a **Trusted Runtime**.
+- An **SMTP Credential** is supplied as redacted Effect configuration, while non-secret SMTP connection settings such as host, port, and secure mode are regular Effect configuration.
+- The first **SMTP Adapter** slice exposes minimal **SMTP Connection Settings**, **SMTP Password Authentication**, and no general Nodemailer options bag.
+- SMTP pool, proxy, DKIM, DSN, and TLS override settings are deferred until they are modeled as provider-neutral concepts or explicit subpath-local SMTP options.
+- The first **SMTP Adapter** slice supports **SMTP Password Authentication** only.
+- OAuth2 and advanced SMTP authentication are deferred until the basic **SMTP Adapter** contract is proven.
+- **SMTP Secure Mode** follows Nodemailer semantics: enabled means implicit TLS on connect, disabled still allows STARTTLS upgrade when the server supports it.
+- The MVP **Email Message** surface includes from, to, cc, bcc, reply-to, subject, text, HTML, and **Attachments**.
+- The MVP excludes custom headers, tags, scheduling, batch sending, templates, idempotency keys, webhooks, and provider metadata.
+- An **Email Message** has at least one non-empty body: text, HTML, or both.
+- An **Email Message** may contain **Email Headers** as an ordered list.
+- An **Email Message** contains **Parsed Email Fields**, not raw external input.
+- A **Parsed Email Field** is created through Effect-returning decoding, not through throwing constructors.
+- An **HTML Body** is not sanitized by the SDK.
+- A **Send Policy** enforces local limits for recipients, subject length, body size, attachment count, and attachment bytes.
+- A **Send Policy** enforces local limits for **Email Header** count, header name bytes, header value bytes, and total header bytes.
+- An **Attachment** contains **Attachment Content**, not a file path or URL for the SDK to read.
+- **Attachment Content** is raw bytes; base64 and MIME encoding are adapter concerns.
+- An **Attachment** declares a **Media Type**, not an arbitrary content-type string.
+- An **Inline Attachment** is still an **Attachment**; the **Content ID** only makes it referenceable from an **HTML Body**.
+- A **Content ID** is stored without angle brackets and adapters format it for their transport.
+- **Content ID** is a core **Attachment** field, not a **Provider-Specific Option**.
+- The v0 **Content ID** shape is the unbracketed RFC msg-id body: ASCII, non-empty, no whitespace, no control characters, no angle brackets, and exactly one `@`.
+- An **Inline Attachment** does not require the **HTML Body** to reference its **Content ID**.
+- An **Email Message** rejects duplicate **Content IDs** across **Attachments**.
+- The v0 **Inline Attachment** surface does not expose attachment disposition; adapters infer transport disposition from **Content ID** when needed.
+- An **Email Header** is allowed only when it does not override structured **Email Message** fields or transport-controlled behavior.
+- An **Email Header** has one **Email Header Name** and one **Email Header Value**.
+- An **Email Message** rejects duplicate **Email Header Names**.
+- An **Email Header Name** cannot be a structured message field, MIME control field, authentication field, delivery trace field, or provider-reserved field.
+- An **Email Header Name** is stored trimmed with caller casing preserved, but duplicate and forbidden-name checks use a lowercase comparison key.
+- An **Email Header Value** preserves caller text but must be non-blank and single-line.
+- Raw **Email Header** input may be a convenience record or ordered list, but stored **Email Message** state is always an ordered list.
+
+## Example Dialogue
+
+> **Dev:** "Should v0 include an SMTP layer?"
+> **Domain expert:** "No. The MVP should prove the Effect service and adapter shape with Resend and testing support first. SMTP comes later."
+
+> **Dev:** "Can the core send type expose Resend-only fields?"
+> **Domain expert:** "No. The core message must stay provider-neutral so adapter swapping stays meaningful."
+
+> **Dev:** "Does 'full email surface' mean tags, scheduling, and webhooks?"
+> **Domain expert:** "No. For v0 it means the common mail surface: recipients, reply-to, subject, text, HTML, and attachments."
+
+> **Dev:** "Can an adapter validate email addresses itself?"
+> **Domain expert:** "No. Security-sensitive fields must already be parsed before an adapter receives the message."
+
+> **Dev:** "Can users pass `Jane <jane@example.com>` directly?"
+> **Domain expert:** "Only to constructor-boundary helpers. Stored messages contain structured Mailboxes so display names and addresses are validated separately."
+
+> **Dev:** "Do we expose `createClient()` for users who do not use Effect?"
+> **Domain expert:** "No. The MVP is Effect-first and exposes services, helpers, and Layers only."
+
+> **Dev:** "Can Resend take an API key string directly?"
+> **Domain expert:** "No. Provider secrets are redacted values or loaded through Effect Config."
+
+> **Dev:** "Can the Resend adapter run in a browser?"
+> **Domain expert:** "No. Provider adapters run in trusted runtimes so provider secrets are not exposed to end users."
+
+> **Dev:** "Does a successful send mean the recipient received the email?"
+> **Domain expert:** "No. It means the transport accepted the email and returned a Send Receipt."
+
+> **Dev:** "Does an SMTP Message ID prove delivery or prevent duplicate sends?"
+> **Domain expert:** "No. It identifies the accepted message but is not delivery proof or a dedupe key."
+
+> **Dev:** "Can users inspect the raw Resend error body?"
+> **Domain expert:** "No, not by default. Send failures expose classified, safe details because raw provider bodies can leak email content or addresses."
+
+> **Dev:** "Should the first SMTP Adapter expose Nodemailer errors directly?"
+> **Domain expert:** "No. Map them into the existing Send Failure classes unless the provider-neutral taxonomy proves insufficient."
+
+> **Dev:** "Can an attachment point to `/tmp/report.pdf`?"
+> **Domain expert:** "No. The SDK receives bytes only; callers decide how files or URLs are loaded."
+
+> **Dev:** "Can attachment content type be any string?"
+> **Domain expert:** "No. It must decode to a strict Media Type."
+
+> **Dev:** "Should callers pass base64 attachments?"
+> **Domain expert:** "No. Callers pass raw bytes and adapters encode for their transport."
+
+> **Dev:** "Are custom headers the next email surface to add?"
+> **Domain expert:** "Yes, if they are validated as Email Headers and cannot override structured message or transport-controlled fields."
+
+> **Dev:** "Are Email Headers a Resend-only option?"
+> **Domain expert:** "No. They belong to the core Email Message as ordered provider-neutral message state."
+
+> **Dev:** "Can the same Email Header Name appear twice?"
+> **Domain expert:** "No, not yet. Resend maps headers as an object, so duplicates are rejected until a provider-neutral duplicate-header story exists."
+
+> **Dev:** "Can users set From, Subject, Message-ID, DKIM-Signature, or Resend-\* through Email Headers?"
+> **Domain expert:** "No. Those are structured, MIME, authentication, delivery, or provider-reserved fields, not user Email Headers."
+
+> **Dev:** "Should Email Header Names be lowercased in stored messages?"
+> **Domain expert:** "No. Trim and preserve casing for output, but compare using lowercase keys."
+
+> **Dev:** "Should Email Header Values be trimmed?"
+> **Domain expert:** "No. Preserve caller text, but reject blank or multi-line values."
+
+> **Dev:** "Can callers pass headers as an object?"
+> **Domain expert:** "Yes, as constructor input only. Stored Email Messages use an ordered Email Header list."
+
+> **Dev:** "Do Email Headers only need constructor validation?"
+> **Domain expert:** "No. Constructors validate safety and meaning; Send Policy enforces local header count and byte limits before transport."
+
+> **Dev:** "Can we let Resend reject oversized emails?"
+> **Domain expert:** "No. The SDK enforces a local Send Policy before calling the transport."
+
+> **Dev:** "How do tests assert an email was sent?"
+> **Domain expert:** "They use the Test Adapter's inspectable Effect service, not logs or globals."
+
+> **Dev:** "Does the SDK make arbitrary HTML safe?"
+> **Domain expert:** "No. HTML is caller-owned content; the SDK validates transport safety, not content safety."
+
+> **Dev:** "Should transient failures be retried automatically?"
+> **Domain expert:** "No. Users opt into retries explicitly because retrying can create duplicate sends."
+
+> **Dev:** "Does Effect tracing mean we can log message details?"
+> **Domain expert:** "No. Effect traces should identify operations, while SDK annotations and logs avoid Email PII by default."
+
+> **Dev:** "What happens when an email address is invalid?"
+> **Domain expert:** "Decoding fails in Effect; constructors should not throw in the secure path."
+
+> **Dev:** "Can a message have neither text nor HTML?"
+> **Domain expert:** "No. A message must have at least one non-empty body."
+
+> **Dev:** "Can the same address appear in both to and cc?"
+> **Domain expert:** "No. Duplicate recipients are rejected instead of silently deduped."
+
+> **Dev:** "Do we support unicode email addresses in v0?"
+> **Domain expert:** "No. v0 accepts strict ASCII mailbox addresses only."
+
+> **Dev:** "Can a display name contain non-English text?"
+> **Domain expert:** "Yes, but it is validated as safe display text, not raw header syntax."
+
+> **Dev:** "Should the next package step add Resend idempotency keys?"
+> **Domain expert:** "No. Idempotency keys are provider-specific, so the next step should stay provider-neutral."
+
+> **Dev:** "Should the next package step add an SMTP Adapter?"
+> **Domain expert:** "Yes. Add an SMTP Adapter using the current Email Message surface only, so a second real transport proves the core contract before new message capabilities are added."
+
+> **Dev:** "Can the first SMTP Adapter skip attachments or Email Headers?"
+> **Domain expert:** "No. Current core surface means text, HTML, attachments, inline attachments, and Email Headers."
+
+> **Dev:** "Should the SMTP Adapter be named `effect-email/nodemailer`?"
+> **Domain expert:** "No. The public subpath is `effect-email/smtp`; Nodemailer is the implementation library."
+
+> **Dev:** "Should the SMTP Adapter use emailjs because it is TypeScript-native?"
+> **Domain expert:** "No. Use Nodemailer because SMTP protocol maturity matters more than TypeScript-native internals."
+
+> **Dev:** "Should the SMTP Adapter export only Layers?"
+> **Domain expert:** "No. Export a subpath-local SMTP Client Service too, matching the Resend adapter shape for testability and composition."
+
+> **Dev:** "Can SMTP passwords be passed as plain strings?"
+> **Domain expert:** "No. SMTP credentials are Provider Secrets and use redacted Effect configuration."
+
+> **Dev:** "Should the first SMTP Adapter include OAuth2?"
+> **Domain expert:** "No. Start with SMTP Password Authentication only; OAuth2 can follow after the adapter shape is proven."
+
+> **Dev:** "Does SMTP secure=false mean the adapter forbids TLS?"
+> **Domain expert:** "No. It means no implicit TLS on connect; STARTTLS may still upgrade the connection when the server supports it."
+
+> **Dev:** "Should the first SMTP Adapter expose Nodemailer's full options bag?"
+> **Domain expert:** "No. Start with host, port, secure mode, username, and redacted password only."
+
+## Flagged Ambiguities
+
+- "layer" was used to mean provider implementation; resolved: canonical term is **Transport Adapter**, exposed through Effect Layers.
+- "full email surface" was used broadly; resolved: the core **Email Message** surface is provider-neutral, not Resend-shaped.
+- "delivery" was used ambiguously; resolved: v0 only models provider acceptance as a **Send Receipt**.
+- "custom headers" was used broadly; resolved: canonical term is **Email Header**, limited to validated provider-neutral header fields.
+- "provider agnostic" was used as an alias; resolved: canonical term is **provider-neutral**.

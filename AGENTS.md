@@ -11,3 +11,21 @@ Every public API change must consider whether these also need updates:
 - packages/effect-email/test/public-api-imports.ts
 
 Every package version bump must update packages/effect-email/CHANGELOG.md.
+
+## Agent skills
+
+### Workflow
+
+Start every piece of work with the `wayfinder` skill. See `.agents/workflow.md`.
+
+### Issue tracker
+
+Work is tracked in Linear under the EffectKit project, using the `effect-email` label. See `.agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the canonical triage label vocabulary. See `.agents/triage-labels.md`.
+
+### Domain docs
+
+This repository uses a single domain context. See `.agents/domain.md`.
