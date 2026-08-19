@@ -148,11 +148,7 @@ export const clientLayer: Layer.Layer<ResendClient, Config.ConfigError, HttpClie
       const resend = yield* ResendConfig;
       return ResendClient.layer({ client, resend });
     }).pipe(Effect.annotateLogs({ service: "@effect-email/ResendClient" })),
-  ).pipe(
-    Layer.provide(
-      Layer.unwrap(config.asEffect().pipe(Effect.map((input) => ResendConfig.layer(input)))),
-    ),
-  );
+  ).pipe(Layer.provide(Layer.unwrap(Effect.map(config, (input) => ResendConfig.layer(input)))));
 
 export const layer: Layer.Layer<Email, never, ResendClient | SendPolicy> = Layer.effect(
   Email,

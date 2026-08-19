@@ -164,9 +164,7 @@ export const defaultLayer: Layer.Layer<Email, Config.ConfigError> = layer.pipe(
   Layer.provide(policyLayer),
   Layer.provide(
     clientLayer.pipe(
-      Layer.provide(
-        Layer.unwrap(config.asEffect().pipe(Effect.map((input) => SmtpConfig.layer(input)))),
-      ),
+      Layer.provide(Layer.unwrap(Effect.map(config, (input) => SmtpConfig.layer(input)))),
     ),
   ),
 );

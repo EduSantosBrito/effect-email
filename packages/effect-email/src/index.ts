@@ -246,7 +246,7 @@ export const EmailMessageInput = Schema.Struct({
 });
 export type EmailMessageInput = typeof EmailMessageInput.Type;
 
-export class MailboxValidationFailure extends Schema.TaggedErrorClass<MailboxValidationFailure>()(
+export class MailboxValidationFailure extends Schema.TaggedError<MailboxValidationFailure>()(
   "MailboxValidationFailure",
   {
     reason: Schema.Literals([
@@ -258,7 +258,7 @@ export class MailboxValidationFailure extends Schema.TaggedErrorClass<MailboxVal
   },
 ) {}
 
-export class MessageContentValidationFailure extends Schema.TaggedErrorClass<MessageContentValidationFailure>()(
+export class MessageContentValidationFailure extends Schema.TaggedError<MessageContentValidationFailure>()(
   "MessageContentValidationFailure",
   {
     reason: Schema.Literals([
@@ -274,7 +274,7 @@ export class MessageContentValidationFailure extends Schema.TaggedErrorClass<Mes
   },
 ) {}
 
-export class EmailMessageValidationFailure extends Schema.TaggedErrorClass<EmailMessageValidationFailure>()(
+export class EmailMessageValidationFailure extends Schema.TaggedError<EmailMessageValidationFailure>()(
   "EmailMessageValidationFailure",
   {
     field: Schema.Literals([
@@ -310,7 +310,7 @@ export class EmailMessageValidationFailure extends Schema.TaggedErrorClass<Email
   },
 ) {}
 
-export class EmailHeaderValidationFailure extends Schema.TaggedErrorClass<EmailHeaderValidationFailure>()(
+export class EmailHeaderValidationFailure extends Schema.TaggedError<EmailHeaderValidationFailure>()(
   "EmailHeaderValidationFailure",
   {
     reason: Schema.Literals([
@@ -322,7 +322,7 @@ export class EmailHeaderValidationFailure extends Schema.TaggedErrorClass<EmailH
   },
 ) {}
 
-export class SendPolicyViolation extends Schema.TaggedErrorClass<SendPolicyViolation>()(
+export class SendPolicyViolation extends Schema.TaggedError<SendPolicyViolation>()(
   "SendPolicyViolation",
   {
     reason: Schema.Literals([
@@ -345,27 +345,27 @@ export class SendPolicyViolation extends Schema.TaggedErrorClass<SendPolicyViola
   },
 ) {}
 
-export class AuthenticationFailure extends Schema.TaggedErrorClass<AuthenticationFailure>()(
+export class AuthenticationFailure extends Schema.TaggedError<AuthenticationFailure>()(
   "AuthenticationFailure",
   { provider: Schema.String, retryable: Schema.Literal(false) },
 ) {}
 
-export class RateLimitFailure extends Schema.TaggedErrorClass<RateLimitFailure>()(
-  "RateLimitFailure",
-  { provider: Schema.String, retryable: Schema.Literal(true) },
-) {}
+export class RateLimitFailure extends Schema.TaggedError<RateLimitFailure>()("RateLimitFailure", {
+  provider: Schema.String,
+  retryable: Schema.Literal(true),
+}) {}
 
-export class RejectedMessageFailure extends Schema.TaggedErrorClass<RejectedMessageFailure>()(
+export class RejectedMessageFailure extends Schema.TaggedError<RejectedMessageFailure>()(
   "RejectedMessageFailure",
   { provider: Schema.String, retryable: Schema.Literal(false) },
 ) {}
 
-export class TransportUnavailableFailure extends Schema.TaggedErrorClass<TransportUnavailableFailure>()(
+export class TransportUnavailableFailure extends Schema.TaggedError<TransportUnavailableFailure>()(
   "TransportUnavailableFailure",
   { provider: Schema.String, retryable: Schema.Literal(true) },
 ) {}
 
-export class ProviderProtocolFailure extends Schema.TaggedErrorClass<ProviderProtocolFailure>()(
+export class ProviderProtocolFailure extends Schema.TaggedError<ProviderProtocolFailure>()(
   "ProviderProtocolFailure",
   { provider: Schema.String, retryable: Schema.Literal(false) },
 ) {}
