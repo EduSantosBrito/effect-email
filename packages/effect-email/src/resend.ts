@@ -35,6 +35,7 @@ import {
   type SendReceipt,
   TransportUnavailableFailure,
 } from "./index.js";
+import { formatHttpDate } from "./internal/http-date.js";
 import { requestBody } from "./internal/resend-request.js";
 
 export const ResendConfigInput = Schema.Struct({
@@ -114,24 +115,8 @@ const rfc850DatePattern =
 const asctimeDatePattern =
   /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (?: [1-9]|[12]\d|3[01]) \d{2}:\d{2}:\d{2} \d{4}$/;
 const printableRequestIdPattern = /^[ -~]{1,256}$/;
-const weekDays: readonly string[] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const months: readonly string[] = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
-];
 const decodeRetryAfter = Schema.decodeUnknownOption(RetryAfter);
 const RetryAfterVariants = Data.taggedEnum<RetryAfterShape>();
-const twoDigits = (value: number): string => value.toString().padStart(2, "0");
 
 const parseRetryAfter = (value: string | undefined): RetryAfterShape | undefined => {
   if (value === undefined) return undefined;
@@ -149,14 +134,12 @@ const parseRetryAfter = (value: string | undefined): RetryAfterShape | undefined
   return Option.match(DateTime.make(value), {
     onNone: () => undefined,
     onSome: (dateTime) => {
-      const parts = DateTime.toPartsUtc(dateTime);
-      const weekDay = weekDays[parts.weekDay];
-      const month = months[parts.month - 1];
-      if (parts.millisecond !== 0 || weekDay === undefined || month === undefined) return undefined;
-      const canonical = `${weekDay}, ${twoDigits(parts.day)} ${month} ${parts.year.toString().padStart(4, "0")} ${twoDigits(parts.hour)}:${twoDigits(parts.minute)}:${twoDigits(parts.second)} GMT`;
-      return Option.getOrUndefined(
-        decodeRetryAfter(RetryAfterVariants.HttpDate({ value: canonical })),
-      );
+      const canonical = formatHttpDate(dateTime);
+      return canonical === undefined
+        ? undefined
+        : Option.getOrUndefined(
+            decodeRetryAfter(RetryAfterVariants.HttpDate({ value: canonical })),
+          );
     },
   });
 };

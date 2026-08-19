@@ -73,15 +73,7 @@ type SmtpClientError = {
 
 const transientSmtpErrorCodes = new Set(["ECONNECTION", "EDNS", "ESOCKET", "ETIMEDOUT", "ETLS"]);
 const phaseAwareSmtpErrorCodes = new Set([...transientSmtpErrorCodes, "EMESSAGE", "EPROTOCOL"]);
-const beforeDataCommands = new Set([
-  "CONN",
-  "EHLO",
-  "HELO",
-  "LHLO",
-  "MAIL FROM",
-  "RCPT TO",
-  "STARTTLS",
-]);
+const beforeDataCommands = new Set(["EHLO", "HELO", "LHLO", "MAIL FROM", "RCPT TO", "STARTTLS"]);
 
 const isBeforeDataCommand = (command: unknown): boolean =>
   typeof command === "string" && (beforeDataCommands.has(command) || command.startsWith("AUTH "));

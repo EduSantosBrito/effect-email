@@ -250,35 +250,43 @@ Every adapter also enforces local header limits through `SendPolicy`: 20 headers
 
 ## Test Adapter
 
-Use `effect-email/test` when application code should send email but tests need inspection instead of network I/O.
+Use `effect-email/test` when application code should send email but tests need deterministic outcomes and inspection instead of network I/O. The control capability scripts outcomes, while inspection exposes attempts and accepted messages separately.
 
 ```ts
 import { assert, describe, it } from "@effect/vitest";
 import { Effect } from "effect";
-import { Email, EmailMessage } from "effect-email";
+import { Email, EmailMessage, SendOptions } from "effect-email";
 import * as TestEmail from "effect-email/test";
 
 describe("email", () => {
-  it.effect("records sent messages", () =>
+  it.effect("replays a hidden acceptance without a duplicate", () =>
     Effect.gen(function* () {
       const email = yield* Email;
+      const control = yield* TestEmail.TestEmailControl;
+      const inspection = yield* TestEmail.TestEmailInspection;
       const message = yield* EmailMessage.make({
         from: "Acme <onboarding@example.com>",
         to: "user@example.com",
         subject: "Hello",
         text: "World",
       });
+      const options = yield* SendOptions.make({ idempotencyKey: "welcome-user-123" });
 
-      yield* email.send(message);
+      yield* control.enqueue(TestEmail.TestEmailOutcome.FailAfterPossibleAcceptance());
 
-      const inspection = yield* TestEmail.TestEmailInspection;
-      const sent = yield* inspection.takeSent;
+      const first = yield* email.send(message, options).pipe(Effect.flip);
+      const replay = yield* email.send(message, options);
 
-      assert.strictEqual(sent.length, 1);
+      assert.strictEqual(first._tag, "AmbiguousSendFailure");
+      assert.strictEqual(replay.messageId, "test-message-1");
+      assert.strictEqual((yield* inspection.attempts).length, 2);
+      assert.strictEqual((yield* inspection.accepted).length, 1);
     }).pipe(Effect.provide(TestEmail.defaultLayer)),
   );
 });
 ```
+
+Available scripted outcomes are `Accept`, `RateLimit`, `TimeoutBeforeAcceptance`, `FailAfterPossibleAcceptance`, and `PermanentFailure`. `TestEmailControl.reset` clears the script, attempt and acceptance histories, receipt sequence, and Layer-local deduplication state. The compatibility inspection APIs `sent`, `takeSent`, and `clear` continue to operate on accepted messages.
 
 ## Send Failures, Ambiguity, and Retry
 

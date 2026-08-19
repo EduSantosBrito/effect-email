@@ -1,6 +1,6 @@
 # SMTP effect-email example
 
-Sends one email through SMTP with the same Effect beta used by the SDK.
+Sends one email through SMTP with the qualified Effect 4.0.0-rc.110 used by the SDK. The `effect-email/smtp` entrypoint depends on Node and Nodemailer and is explicitly not supported in Cloudflare Workers.
 
 Requires `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD`, and `EMAIL_DOMAIN` in `.env`.
 

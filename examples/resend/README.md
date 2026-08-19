@@ -1,6 +1,6 @@
 # Resend effect-email example
 
-Sends one email through Resend with the same Effect beta used by the SDK.
+Sends one email through Resend with the qualified Effect 4.0.0-rc.110 used by the SDK. The `effect-email/resend` entrypoint is supported in Node and Cloudflare Workers when its Provider Secret remains in a trusted runtime.
 
 Requires `RESEND_API_KEY` and `EMAIL_DOMAIN` in `.env`.
 

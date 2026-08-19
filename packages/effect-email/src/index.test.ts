@@ -1970,7 +1970,6 @@ describe("effect-email SMTP adapter", () => {
         [{ responseCode: 535 }, "AuthenticationFailure", false],
         [{ responseCode: 450 }, "TransportUnavailableFailure", true],
         [{ responseCode: 550 }, "RejectedMessageFailure", false],
-        [{ code: "ETIMEDOUT", command: "CONN" }, "TransportUnavailableFailure", true],
         [{ code: "ESOCKET", command: "EHLO" }, "TransportUnavailableFailure", true],
         [{ code: "ECONNECTION", command: "MAIL FROM" }, "TransportUnavailableFailure", true],
         [{ code: "ETLS", command: "STARTTLS" }, "TransportUnavailableFailure", true],
@@ -1992,6 +1991,10 @@ describe("effect-email SMTP adapter", () => {
       }
 
       for (const error of [
+        { code: "ETIMEDOUT", command: "CONN" },
+        { code: "ESOCKET", command: "CONN" },
+        { code: "ECONNECTION", command: "CONN" },
+        { code: "ETLS", command: "CONN" },
         { code: "ETIMEDOUT", command: "DATA" },
         { code: "EMESSAGE", command: "DATA" },
         { code: "ETIMEDOUT", command: "VERIFY" },

@@ -15,7 +15,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/EduSantosBrito/effect-email",
+    "url": "git+https://github.com/EduSantosBrito/effect-email.git",
     "directory": "packages/effect-email"
   },
   "files": [
@@ -67,7 +67,7 @@
     "prepare": "bun --bun effect-tsgo patch"
   },
   "dependencies": {
-    "nodemailer": "8.0.7"
+    "nodemailer": "9.0.5"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "catalog:",
@@ -75,7 +75,7 @@
     "@effect/tsgo": "catalog:",
     "@effect/vitest": "catalog:",
     "@types/bun": "catalog:",
-    "@types/nodemailer": "8.0.0",
+    "@types/nodemailer": "8.0.1",
     "@typescript/native-preview": "catalog:",
     "bun-types": "catalog:",
     "effect": "catalog:",
