@@ -36,3 +36,6 @@ jobs:
 
       - name: Package smoke
         run: bun run package:smoke
+
+      - name: Cloudflare Workers compatibility
+        run: bun run test:cloudflare

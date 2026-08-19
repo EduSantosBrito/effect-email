@@ -53,6 +53,8 @@
   "scripts": {
     "build": "rm -rf dist && bun build ./src/index.ts ./src/resend.ts ./src/smtp.ts ./src/test.ts --outdir ./dist --target bun --format esm --packages external && tsgo --emitDeclarationOnly",
     "check": "bun --bun tsgo --project tsconfig.check.json && bun run lint && bun run type-test",
+    "cloudflare:dry-run": "bun run build && bun ./test/cloudflare/run-wrangler.mjs",
+    "cloudflare:test": "vitest run --config ./test/cloudflare/vitest.config.ts",
     "format": "bun --bun oxfmt --write package.json tsconfig.json src",
     "format:check": "bun --bun oxfmt --check package.json tsconfig.json src",
     "knip": "bunx knip",
@@ -60,6 +62,7 @@
     "package:smoke": "bun ./test/package-smoke/run.mjs",
     "prepack": "bun run build",
     "test": "bun --bun vitest run src",
+    "test:cloudflare": "bun run cloudflare:dry-run && bun run cloudflare:test",
     "type-test": "bun --bun tstyche --root . --tsconfig ./tsconfig.tstyche.json",
     "prepare": "bun --bun effect-tsgo patch"
   },
@@ -67,6 +70,7 @@
     "nodemailer": "8.0.7"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "catalog:",
     "@effect/language-service": "catalog:",
     "@effect/tsgo": "catalog:",
     "@effect/vitest": "catalog:",
@@ -80,7 +84,8 @@
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
     "tstyche": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "wrangler": "catalog:"
   },
   "peerDependencies": {
     "effect": "4.0.0-rc.110"

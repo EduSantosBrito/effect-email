@@ -10,6 +10,7 @@
     ],
     "catalog": {
       "@changesets/cli": "2.31.0",
+      "@cloudflare/vitest-pool-workers": "0.22.0",
       "@effect/language-service": "0.41.1",
       "@effect/tsgo": "0.5.2",
       "@effect/vitest": "4.0.0-rc.110",
@@ -24,12 +25,15 @@
       "pkg-pr-new": "0.0.88",
       "tstyche": "7.1.0",
       "typescript": "6.0.3",
-      "vitest": "4.1.5"
+      "vitest": "4.1.5",
+      "wrangler": "4.124.0"
     }
   },
   "scripts": {
     "build": "bun --filter effect-email build",
     "check": "bun run build && bun --filter effect-email check && bun --filter effect-email-resend-example check",
+    "cloudflare:dry-run": "bun --filter effect-email cloudflare:dry-run",
+    "cloudflare:test": "bun --filter effect-email cloudflare:test",
     "format": "bun --bun oxfmt -c oxlint.config.ts",
     "format:check": "bun --bun oxfmt --check -c oxlint.config.ts",
     "lint": "bun --filter effect-email lint",
@@ -37,7 +41,8 @@
     "changeset": "bun --bun changeset",
     "changeset:status": "bun --bun changeset status",
     "changeset:version": "bun --bun changeset version",
-    "test": "bun --filter effect-email test"
+    "test": "bun --filter effect-email test",
+    "test:cloudflare": "bun --filter effect-email test:cloudflare"
   },
   "devDependencies": {
     "@changesets/cli": "catalog:",

@@ -22,6 +22,17 @@ bun install
 - [SMTP example](https://github.com/EduSantosBrito/effect-email/tree/main/examples/smtp)
 - Test adapter example below
 
+## Runtime support
+
+| Entrypoint            | Node | Cloudflare Workers |
+| --------------------- | ---- | ------------------ |
+| `effect-email`        | Yes  | Yes                |
+| `effect-email/resend` | Yes  | Yes                |
+| `effect-email/test`   | Yes  | Yes                |
+| `effect-email/smtp`   | Yes  | No                 |
+
+The root, Resend, and Test entrypoints are qualified with Wrangler dry-runs and tests inside the Cloudflare Workers runtime. Resend still requires a trusted runtime for its Provider Secret. SMTP depends on Nodemailer and Node APIs, so it is explicitly outside the Cloudflare Workers support promise.
+
 ## Setup
 
 For Resend, create an API key and expose it as `RESEND_API_KEY` in the trusted runtime that sends email.
