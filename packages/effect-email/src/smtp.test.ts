@@ -1,16 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
 import { Cause, Effect, Exit, Fiber, Layer, Predicate, Redacted, Ref, Schema } from "effect";
-import { Email, EmailMessage, SendOptions, SendPolicy, type EmailMessageInput } from "./index";
+import { Email, SendOptions, SendPolicy } from "./index";
 import * as Smtp from "./smtp";
-
-const makeMessage = (input: Partial<EmailMessageInput> = {}) =>
-  EmailMessage.make({
-    from: "Sender <sender@example.com>",
-    to: "you@example.com",
-    subject: "Hello",
-    text: "Plain",
-    ...input,
-  });
+import { makeMessage } from "./test-fixtures";
 
 const throwUnexpectedDefect = Schema.decodeUnknownSync(Schema.Never);
 

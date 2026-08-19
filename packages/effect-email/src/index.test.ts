@@ -29,15 +29,7 @@ import {
   type EmailMessageInput,
 } from "./index";
 import * as TestEmail from "./test";
-
-const makeMessage = (input: Partial<EmailMessageInput> = {}) =>
-  EmailMessage.make({
-    from: "Sender <sender@example.com>",
-    to: "you@example.com",
-    subject: "Hello",
-    text: "Plain",
-    ...input,
-  });
+import { makeMessage } from "./test-fixtures";
 
 const decodeEmailAddress = Schema.decodeUnknownEffect(EmailAddress);
 const decodeDisplayName = Schema.decodeUnknownEffect(DisplayName);

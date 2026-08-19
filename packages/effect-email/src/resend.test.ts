@@ -6,25 +6,10 @@ import {
   HttpClientRequest,
   HttpClientResponse,
 } from "effect/unstable/http";
-import {
-  Email,
-  EmailMessage,
-  RetryAfter,
-  SendOptions,
-  SendPolicy,
-  type EmailMessageInput,
-} from "./index";
+import { Email, RetryAfter, SendOptions, SendPolicy } from "./index";
 import { requestBody } from "./internal/resend-request";
 import * as Resend from "./resend";
-
-const makeMessage = (input: Partial<EmailMessageInput> = {}) =>
-  EmailMessage.make({
-    from: "Sender <sender@example.com>",
-    to: "you@example.com",
-    subject: "Hello",
-    text: "Plain",
-    ...input,
-  });
+import { makeMessage } from "./test-fixtures";
 
 const ResendRequestBodySchema = Schema.Struct({
   from: Schema.String,

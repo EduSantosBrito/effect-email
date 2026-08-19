@@ -48,6 +48,6 @@
     ]
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["dist", "node_modules", "../../.repos", "src/**/*.test.ts"],
+  "exclude": ["dist", "node_modules", "../../.repos", "src/**/*.test.ts", "src/test-fixtures.ts"],
   "$schema": "https://raw.githubusercontent.com/Effect-TS/tsgo/refs/heads/main/schema.json"
 }
