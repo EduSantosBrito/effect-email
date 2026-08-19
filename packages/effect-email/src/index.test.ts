@@ -1,5 +1,17 @@
 import { assert, describe, it } from "@effect/vitest";
-import { Cause, Data, Effect, Exit, Layer, Predicate, Redacted, Ref, Result, Schema } from "effect";
+import {
+  Cause,
+  Data,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Predicate,
+  Redacted,
+  Ref,
+  Result,
+  Schema,
+} from "effect";
 import {
   HttpClient,
   HttpClientError,
@@ -82,6 +94,7 @@ const decodeMediaType = Schema.decodeUnknownEffect(MediaType);
 const decodeContentId = Schema.decodeUnknownEffect(ContentId);
 const decodeSendFailureMetadata = Schema.decodeUnknownEffect(SendFailureMetadata);
 const decodeRetryAfter = Schema.decodeUnknownEffect(RetryAfter);
+const throwUnexpectedDefect = Schema.decodeUnknownSync(Schema.Never);
 const RetryAfterVariants = Data.taggedEnum<RetryAfter>();
 
 const headerValues = (headers: EmailHeadersShape | undefined) => {
@@ -1434,6 +1447,42 @@ describe("effect-email SMTP adapter", () => {
     }),
   );
 
+  it.effect("accepts Send Options without adding SMTP idempotency semantics", () =>
+    Effect.gen(function* () {
+      const seen = yield* Ref.make<readonly unknown[]>([]);
+      const transporter = {
+        sendMail: (mail: unknown) =>
+          Ref.update(seen, (messages) => [...messages, mail]).pipe(
+            Effect.as({ messageId: "<smtp-id@example.com>" }),
+            Effect.runPromise,
+          ),
+      };
+      const message = yield* makeMessage();
+      const options = yield* SendOptions.make({ idempotencyKey: "same-attempt-key" });
+
+      yield* Effect.gen(function* () {
+        const email = yield* Email;
+        yield* email.send(message, options);
+        yield* email.send(message, options);
+      }).pipe(Effect.provide(provideSmtp(transporter)));
+
+      assert.deepStrictEqual(yield* Ref.get(seen), [
+        {
+          from: "Sender <sender@example.com>",
+          to: ["you@example.com"],
+          subject: "Hello",
+          text: "Plain",
+        },
+        {
+          from: "Sender <sender@example.com>",
+          to: ["you@example.com"],
+          subject: "Hello",
+          text: "Plain",
+        },
+      ]);
+    }),
+  );
+
   it.effect("enforces policy before invoking SmtpClient", () =>
     Effect.gen(function* () {
       const attempts = yield* Ref.make(0);
@@ -1633,18 +1682,55 @@ describe("effect-email SMTP adapter", () => {
     }),
   );
 
+  it.effect("keeps unexpected SMTP client errors in the defect channel", () =>
+    Effect.gen(function* () {
+      const message = yield* makeMessage();
+
+      for (const sendMail of [
+        () => throwUnexpectedDefect("unexpected synchronous defect"),
+        () => Effect.failCause(Cause.die("unexpected asynchronous defect")).pipe(Effect.runPromise),
+        () => Effect.fail({ code: "ERR_ASSERTION" }).pipe(Effect.runPromise),
+      ]) {
+        const exit = yield* Effect.gen(function* () {
+          const email = yield* Email;
+          return yield* email.send(message);
+        }).pipe(Effect.provide(provideSmtp({ sendMail })), Effect.exit);
+
+        assert.ok(Exit.hasDies(exit));
+      }
+    }),
+  );
+
+  it.effect("preserves interruption while an SMTP send is pending", () =>
+    Effect.gen(function* () {
+      const message = yield* makeMessage();
+      const pending = new Promise<never>(() => undefined);
+      const send = Effect.gen(function* () {
+        const email = yield* Email;
+        return yield* email.send(message);
+      }).pipe(Effect.provide(provideSmtp({ sendMail: () => pending })));
+
+      const fiber = yield* Effect.forkChild(send);
+      yield* Effect.yieldNow;
+      yield* Fiber.interrupt(fiber);
+      const exit = yield* Fiber.join(fiber).pipe(Effect.exit);
+
+      assert.ok(Exit.hasInterrupts(exit));
+    }),
+  );
+
   it.effect("classifies SMTP failures through send", () =>
     Effect.gen(function* () {
       const message = yield* makeMessage();
       const cases: ReadonlyArray<readonly [unknown, string, boolean]> = [
         [{ code: "EAUTH" }, "AuthenticationFailure", false],
         [{ responseCode: 535 }, "AuthenticationFailure", false],
-        [{ responseCode: 450 }, "RejectedMessageFailure", false],
+        [{ responseCode: 450 }, "TransportUnavailableFailure", true],
         [{ responseCode: 550 }, "RejectedMessageFailure", false],
-        [{ code: "ETIMEDOUT" }, "TransportUnavailableFailure", true],
-        [{ code: "ESOCKET" }, "TransportUnavailableFailure", true],
-        [{ code: "ECONNECTION" }, "TransportUnavailableFailure", true],
-        [{ code: "ETLS" }, "TransportUnavailableFailure", true],
+        [{ code: "ETIMEDOUT", command: "CONN" }, "TransportUnavailableFailure", true],
+        [{ code: "ESOCKET", command: "EHLO" }, "TransportUnavailableFailure", true],
+        [{ code: "ECONNECTION", command: "MAIL FROM" }, "TransportUnavailableFailure", true],
+        [{ code: "ETLS", command: "STARTTLS" }, "TransportUnavailableFailure", true],
       ];
 
       for (const [error, tag, retryable] of cases) {
@@ -1662,6 +1748,26 @@ describe("effect-email SMTP adapter", () => {
         assert.strictEqual(failure.disposition, retryable ? "retryable" : "permanent");
       }
 
+      for (const error of [
+        { code: "ETIMEDOUT", command: "DATA" },
+        { code: "EMESSAGE", command: "DATA" },
+        { code: "ETIMEDOUT", command: "VERIFY" },
+        { code: "ETIMEDOUT" },
+      ]) {
+        const transporter = {
+          sendMail: () => Effect.fail(error).pipe(Effect.runPromise),
+        };
+        const failure = yield* Effect.gen(function* () {
+          const email = yield* Email;
+          return yield* email.send(message);
+        }).pipe(Effect.provide(provideSmtp(transporter)), Effect.flip);
+
+        assert.ok(Predicate.isTagged(failure, "AmbiguousSendFailure"));
+        assert.strictEqual(failure.provider, "smtp");
+        assert.strictEqual(failure.disposition, "ambiguous");
+        assert.strictEqual(failure.retryable, false);
+      }
+
       const malformedCases = [{}, { messageId: "" }, { messageId: " " }, { messageId: 123 }];
       for (const info of malformedCases) {
         const transporter = {
@@ -1672,10 +1778,10 @@ describe("effect-email SMTP adapter", () => {
           return yield* email.send(message);
         }).pipe(Effect.provide(provideSmtp(transporter)), Effect.flip);
 
-        assert.ok(Predicate.isTagged(failure, "ProviderProtocolFailure"));
+        assert.ok(Predicate.isTagged(failure, "AmbiguousSendFailure"));
         assert.strictEqual(failure.provider, "smtp");
         assert.strictEqual(failure.retryable, false);
-        assert.strictEqual(failure.disposition, "permanent");
+        assert.strictEqual(failure.disposition, "ambiguous");
       }
     }),
   );

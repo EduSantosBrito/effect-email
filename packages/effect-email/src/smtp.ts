@@ -1,10 +1,10 @@
 import nodemailer from "nodemailer";
-import { Config, Context, Effect, Layer, Redacted, Schema } from "effect";
+import { Cause, Config, Context, Effect, Layer, Redacted, Schema } from "effect";
 import {
+  AmbiguousSendFailure,
   AuthenticationFailure,
   Email,
   type EmailMessage,
-  ProviderProtocolFailure,
   RejectedMessageFailure,
   type SendFailure,
   type SendOptions,
@@ -63,8 +63,28 @@ const SmtpClientInput = Schema.Struct({
 
 type NodemailerErrorLike = {
   readonly code?: unknown;
+  readonly command?: unknown;
   readonly responseCode?: unknown;
 };
+
+type SmtpClientError = {
+  readonly cause: unknown;
+};
+
+const transientSmtpErrorCodes = new Set(["ECONNECTION", "EDNS", "ESOCKET", "ETIMEDOUT", "ETLS"]);
+const phaseAwareSmtpErrorCodes = new Set([...transientSmtpErrorCodes, "EMESSAGE", "EPROTOCOL"]);
+const beforeDataCommands = new Set([
+  "CONN",
+  "EHLO",
+  "HELO",
+  "LHLO",
+  "MAIL FROM",
+  "RCPT TO",
+  "STARTTLS",
+]);
+
+const isBeforeDataCommand = (command: unknown): boolean =>
+  typeof command === "string" && (beforeDataCommands.has(command) || command.startsWith("AUTH "));
 
 export class SmtpConfig extends Context.Service<
   SmtpConfig,
@@ -102,41 +122,79 @@ const receiptFromInfo = (info: SmtpSentMessageInfo): Effect.Effect<SendReceipt, 
   typeof info.messageId === "string" && info.messageId.trim().length > 0
     ? Effect.succeed({ provider: "smtp", messageId: info.messageId })
     : Effect.fail(
-        new ProviderProtocolFailure({
+        new AmbiguousSendFailure({
           provider: "smtp",
-          disposition: "permanent",
+          disposition: "ambiguous",
           retryable: false,
         }),
       );
 
-const classifySmtpError = (error: unknown): SendFailure => {
-  const value: NodemailerErrorLike = typeof error === "object" && error !== null ? error : {};
+const classifySmtpError = ({ cause }: SmtpClientError): Effect.Effect<never, SendFailure> => {
+  const value: NodemailerErrorLike = typeof cause === "object" && cause !== null ? cause : {};
 
   if (value.responseCode === 535 || value.code === "EAUTH") {
-    return new AuthenticationFailure({
-      provider: "smtp",
-      disposition: "permanent",
-      retryable: false,
-    });
+    return Effect.fail(
+      new AuthenticationFailure({
+        provider: "smtp",
+        disposition: "permanent",
+        retryable: false,
+      }),
+    );
   }
 
   if (
     typeof value.responseCode === "number" &&
     value.responseCode >= 400 &&
-    value.responseCode < 600
+    value.responseCode < 500
   ) {
-    return new RejectedMessageFailure({
-      provider: "smtp",
-      disposition: "permanent",
-      retryable: false,
-    });
+    return Effect.fail(
+      new TransportUnavailableFailure({
+        provider: "smtp",
+        disposition: "retryable",
+        retryable: true,
+      }),
+    );
   }
 
-  return new TransportUnavailableFailure({
-    provider: "smtp",
-    disposition: "retryable",
-    retryable: true,
-  });
+  if (
+    typeof value.responseCode === "number" &&
+    value.responseCode >= 500 &&
+    value.responseCode < 600
+  ) {
+    return Effect.fail(
+      new RejectedMessageFailure({
+        provider: "smtp",
+        disposition: "permanent",
+        retryable: false,
+      }),
+    );
+  }
+
+  if (
+    typeof value.code === "string" &&
+    transientSmtpErrorCodes.has(value.code) &&
+    isBeforeDataCommand(value.command)
+  ) {
+    return Effect.fail(
+      new TransportUnavailableFailure({
+        provider: "smtp",
+        disposition: "retryable",
+        retryable: true,
+      }),
+    );
+  }
+
+  if (typeof value.code === "string" && phaseAwareSmtpErrorCodes.has(value.code)) {
+    return Effect.fail(
+      new AmbiguousSendFailure({
+        provider: "smtp",
+        disposition: "ambiguous",
+        retryable: false,
+      }),
+    );
+  }
+
+  return Effect.failCause(Cause.die(cause));
 };
 
 const executeSmtpSend = (
@@ -146,8 +204,13 @@ const executeSmtpSend = (
 ): Effect.Effect<SendReceipt, SendFailure> =>
   Effect.tryPromise({
     try: () => transporter.sendMail(mailOptions(message)),
-    catch: classifySmtpError,
-  }).pipe(Effect.flatMap(receiptFromInfo));
+    catch: (cause): SmtpClientError => ({ cause }),
+  }).pipe(
+    Effect.matchEffect({
+      onFailure: classifySmtpError,
+      onSuccess: receiptFromInfo,
+    }),
+  );
 
 export const policyConfig: SendPolicy.Config = SendPolicy.defaultConfig;
 
