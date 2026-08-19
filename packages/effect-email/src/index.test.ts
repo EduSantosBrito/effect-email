@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Layer, Predicate, Redacted, Ref, Result, Schema } from "effect";
+import { Cause, Data, Effect, Exit, Layer, Predicate, Redacted, Ref, Result, Schema } from "effect";
 import {
   HttpClient,
   HttpClientError,
@@ -7,7 +7,9 @@ import {
   HttpClientResponse,
 } from "effect/unstable/http";
 import {
+  AmbiguousSendFailure,
   Attachment,
+  AuthenticationFailure,
   ContentId,
   DisplayName,
   Email,
@@ -20,7 +22,15 @@ import {
   Mailbox,
   MediaType,
   MessageBody,
+  ProviderProtocolFailure,
+  RateLimitFailure,
+  RejectedMessageFailure,
+  RetryAfter,
+  SendFailureMetadata,
+  SendOptions,
   SendPolicy,
+  SendPolicyViolation,
+  TransportUnavailableFailure,
   type EmailHeaders as EmailHeadersShape,
   type EmailMessageInput,
 } from "./index";
@@ -67,6 +77,9 @@ const decodeEmailHeaderName = Schema.decodeUnknownEffect(EmailHeaderName);
 const decodeEmailHeaderValue = Schema.decodeUnknownEffect(EmailHeaderValue);
 const decodeMediaType = Schema.decodeUnknownEffect(MediaType);
 const decodeContentId = Schema.decodeUnknownEffect(ContentId);
+const decodeSendFailureMetadata = Schema.decodeUnknownEffect(SendFailureMetadata);
+const decodeRetryAfter = Schema.decodeUnknownEffect(RetryAfter);
+const RetryAfterVariants = Data.taggedEnum<RetryAfter>();
 
 const headerValues = (headers: EmailHeadersShape | undefined) => {
   assert.ok(headers);
@@ -101,6 +114,208 @@ const provideSmtp = (
     Layer.provide(Layer.succeed(Smtp.SmtpClient)(Smtp.SmtpClient.layer({ transporter }))),
     Layer.provide(policy),
   );
+
+describe("effect-email send attempt contracts", () => {
+  it.effect("parses Idempotency Keys and Send Options at their public boundary", () =>
+    Effect.gen(function* () {
+      for (const value of ["a", "!visible~", "x".repeat(256)]) {
+        const options = yield* SendOptions.make({ idempotencyKey: value });
+        assert.strictEqual(options.idempotencyKey, value);
+      }
+      assert.strictEqual((yield* SendOptions.make({})).idempotencyKey, undefined);
+
+      for (const value of ["", "x".repeat(257), "has space", "tab\t", "line\n", "café"]) {
+        const failure = yield* SendOptions.make({ idempotencyKey: value }).pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "SendOptionsValidationFailure");
+        assert.strictEqual(failure.reason, "InvalidIdempotencyKey");
+      }
+
+      const malformed = yield* SendOptions.make(null).pipe(Effect.flip);
+      assert.strictEqual(malformed.reason, "InvalidSendOptions");
+    }),
+  );
+
+  it.effect("passes optional parsed Send Options after policy validation", () =>
+    Effect.gen(function* () {
+      const policyCalls = yield* Ref.make(0);
+      const adapterOptions = yield* Ref.make<readonly unknown[]>([]);
+      const message = yield* makeMessage();
+      const options = yield* SendOptions.make({ idempotencyKey: "attempt-1" });
+      const policy = SendPolicy.of({
+        ...SendPolicy.defaultConfig,
+        validate: (candidate) =>
+          Ref.update(policyCalls, (count) => count + 1).pipe(Effect.as(candidate)),
+      });
+      const email = Email.layer({
+        policy,
+        send: (_candidate, candidateOptions) =>
+          Ref.update(adapterOptions, (seen) => [...seen, candidateOptions]).pipe(
+            Effect.as({ provider: "test", messageId: "receipt" }),
+          ),
+      });
+
+      yield* email.send(message, options);
+      yield* email.send(message);
+
+      assert.strictEqual(yield* Ref.get(policyCalls), 2);
+      assert.deepStrictEqual(yield* Ref.get(adapterOptions), [options, undefined]);
+    }),
+  );
+
+  it.effect("stops invalid Send Options before policy or Transport Adapter effects", () =>
+    Effect.gen(function* () {
+      const policyCalls = yield* Ref.make(0);
+      const adapterCalls = yield* Ref.make(0);
+      const message = yield* makeMessage();
+      const policy = SendPolicy.of({
+        ...SendPolicy.defaultConfig,
+        validate: (candidate) =>
+          Ref.update(policyCalls, (count) => count + 1).pipe(Effect.as(candidate)),
+      });
+      const email = Email.layer({
+        policy,
+        send: () =>
+          Ref.update(adapterCalls, (count) => count + 1).pipe(
+            Effect.as({ provider: "test", messageId: "receipt" }),
+          ),
+      });
+
+      const failure = yield* SendOptions.make({ idempotencyKey: "not valid" }).pipe(
+        Effect.flatMap((options) => email.send(message, options)),
+        Effect.flip,
+      );
+
+      assert.strictEqual(failure._tag, "SendOptionsValidationFailure");
+      assert.strictEqual(yield* Ref.get(policyCalls), 0);
+      assert.strictEqual(yield* Ref.get(adapterCalls), 0);
+    }),
+  );
+
+  it.effect("exposes bounded operational Send Failure metadata", () =>
+    Effect.gen(function* () {
+      const delay = RetryAfterVariants.DelaySeconds({ seconds: 30 });
+      const httpDate = RetryAfterVariants.HttpDate({
+        value: "Sun, 06 Nov 1994 08:49:37 GMT",
+      });
+      const metadata = yield* decodeSendFailureMetadata({
+        status: 429,
+        retryAfter: delay,
+        requestId: "request-123",
+      });
+      assert.deepStrictEqual(metadata, {
+        status: 429,
+        retryAfter: delay,
+        requestId: "request-123",
+      });
+      assert.deepStrictEqual(yield* decodeSendFailureMetadata({ retryAfter: httpDate }), {
+        retryAfter: httpDate,
+      });
+      assert.deepStrictEqual(
+        yield* decodeSendFailureMetadata({
+          status: 500,
+          body: "sender@example.com",
+          headers: { authorization: "secret" },
+          cause: "provider payload",
+          credential: "secret",
+        }),
+        { status: 500 },
+      );
+
+      for (const input of [
+        { status: 99 },
+        { status: 600 },
+        { status: 200.5 },
+        { retryAfter: RetryAfterVariants.DelaySeconds({ seconds: -1 }) },
+        {
+          retryAfter: RetryAfterVariants.DelaySeconds({
+            seconds: Number.MAX_SAFE_INTEGER + 1,
+          }),
+        },
+        {
+          retryAfter: RetryAfterVariants.HttpDate({
+            value: "Sunday, 06-Nov-94 08:49:37 GMT",
+          }),
+        },
+        { requestId: "" },
+        { requestId: "x".repeat(257) },
+      ]) {
+        yield* decodeSendFailureMetadata(input).pipe(Effect.flip);
+      }
+
+      yield* decodeRetryAfter(httpDate);
+    }),
+  );
+
+  it.effect("classifies the closed Send Failure union with three dispositions", () =>
+    Effect.gen(function* () {
+      const permanent = [
+        new SendPolicyViolation({
+          reason: "EmptyRecipients",
+          limit: 1,
+          disposition: "permanent",
+          retryable: false,
+        }),
+        new AuthenticationFailure({
+          provider: "resend",
+          disposition: "permanent",
+          retryable: false,
+        }),
+        new RejectedMessageFailure({
+          provider: "resend",
+          disposition: "permanent",
+          retryable: false,
+        }),
+        new ProviderProtocolFailure({
+          provider: "resend",
+          disposition: "permanent",
+          retryable: false,
+        }),
+      ];
+      const retryable = [
+        new RateLimitFailure({ provider: "resend", disposition: "retryable", retryable: true }),
+        new TransportUnavailableFailure({
+          provider: "resend",
+          disposition: "retryable",
+          retryable: true,
+        }),
+      ];
+      const ambiguous = new AmbiguousSendFailure({
+        provider: "resend",
+        disposition: "ambiguous",
+        retryable: false,
+        metadata: { status: 202 },
+      });
+
+      assert.ok(
+        permanent.every((failure) => failure.disposition === "permanent" && !failure.retryable),
+      );
+      assert.ok(
+        retryable.every((failure) => failure.disposition === "retryable" && failure.retryable),
+      );
+      assert.strictEqual(ambiguous.disposition, "ambiguous");
+      assert.strictEqual(ambiguous.retryable, false);
+      assert.deepStrictEqual(ambiguous.metadata, { status: 202 });
+      yield* Effect.void;
+    }),
+  );
+
+  it.effect("keeps defects and interruption outside Send Failure", () =>
+    Effect.gen(function* () {
+      const message = yield* makeMessage();
+      const defecting = Email.layer({
+        policy: SendPolicy.defaultLayer,
+        send: () => Effect.failCause(Cause.die("adapter defect")),
+      });
+      const interrupted = Email.layer({
+        policy: SendPolicy.defaultLayer,
+        send: () => Effect.interrupt,
+      });
+
+      assert.ok(Exit.hasDies(yield* defecting.send(message).pipe(Effect.exit)));
+      assert.ok(Exit.hasInterrupts(yield* interrupted.send(message).pipe(Effect.exit)));
+    }),
+  );
+});
 
 describe("effect-email constructors", () => {
   it.effect("builds a validated message and sends through the test layer", () =>
@@ -702,14 +917,14 @@ describe("effect-email Resend adapter", () => {
   it.effect("classifies safe failures and config", () =>
     Effect.gen(function* () {
       const message = yield* makeMessage();
-      const cases: ReadonlyArray<readonly [number, string]> = [
-        [401, "AuthenticationFailure"],
-        [429, "RateLimitFailure"],
-        [422, "RejectedMessageFailure"],
-        [503, "TransportUnavailableFailure"],
-        [302, "ProviderProtocolFailure"],
+      const cases: ReadonlyArray<readonly [number, string, "permanent" | "retryable"]> = [
+        [401, "AuthenticationFailure", "permanent"],
+        [429, "RateLimitFailure", "retryable"],
+        [422, "RejectedMessageFailure", "permanent"],
+        [503, "TransportUnavailableFailure", "retryable"],
+        [302, "ProviderProtocolFailure", "permanent"],
       ];
-      for (const [status, tag] of cases) {
+      for (const [status, tag, disposition] of cases) {
         const client = HttpClient.make((request) =>
           Effect.succeed(
             HttpClientResponse.fromWeb(
@@ -723,6 +938,10 @@ describe("effect-email Resend adapter", () => {
           return yield* email.send(message);
         }).pipe(Effect.provide(provideResend(client)), Effect.flip);
         const rendered = String(failure);
+        assert.strictEqual(failure.disposition, disposition);
+        if (!Predicate.isTagged(failure, "SendPolicyViolation")) {
+          assert.deepStrictEqual(failure.metadata, { status });
+        }
         assert.ok(rendered.includes(tag));
         assert.ok(!rendered.includes("sender@example.com"));
         assert.ok(!rendered.includes("secret"));
@@ -1002,6 +1221,7 @@ describe("effect-email SMTP adapter", () => {
         assert.strictEqual(failure._tag, tag);
         assert.strictEqual(failure.provider, "smtp");
         assert.strictEqual(failure.retryable, retryable);
+        assert.strictEqual(failure.disposition, retryable ? "retryable" : "permanent");
       }
 
       const malformedCases = [{}, { messageId: "" }, { messageId: " " }, { messageId: 123 }];
@@ -1017,6 +1237,7 @@ describe("effect-email SMTP adapter", () => {
         assert.ok(Predicate.isTagged(failure, "ProviderProtocolFailure"));
         assert.strictEqual(failure.provider, "smtp");
         assert.strictEqual(failure.retryable, false);
+        assert.strictEqual(failure.disposition, "permanent");
       }
     }),
   );

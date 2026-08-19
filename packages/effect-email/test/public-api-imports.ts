@@ -1,4 +1,5 @@
 import {
+  AmbiguousSendFailure,
   Attachment,
   AttachmentInput,
   AuthenticationFailure,
@@ -30,6 +31,13 @@ import {
   SendPolicyConfigInput,
   SendPolicyViolation,
   HtmlBody,
+  IdempotencyKey,
+  RetryAfter,
+  SendFailureDisposition,
+  SendFailureMetadata,
+  SendOptions,
+  SendOptionsInput,
+  SendOptionsValidationFailure,
   TransportUnavailableFailure,
   Subject,
   TextBody,
@@ -46,13 +54,19 @@ import {
   type EmailHeaderValue as EmailHeaderValueShape,
   type EmailMessageInput as EmailMessageInputShape,
   type HtmlBody as HtmlBodyShape,
+  type IdempotencyKey as IdempotencyKeyShape,
   type EmailSend,
   type Mailbox as MailboxShape,
   type MailboxInput as MailboxInputShape,
   type MediaType as MediaTypeShape,
   type MessageBody as MessageBodyShape,
   type MessageBodyInput as MessageBodyInputShape,
+  type RetryAfter as RetryAfterShape,
   type SendFailure,
+  type SendFailureDisposition as SendFailureDispositionShape,
+  type SendFailureMetadata as SendFailureMetadataShape,
+  type SendOptions as SendOptionsShape,
+  type SendOptionsInput as SendOptionsInputShape,
   type SendPolicyConfig,
   type SendReceipt,
   type Subject as SubjectShape,
@@ -96,6 +110,7 @@ import {
 
 type PublicApiContract = {
   readonly root:
+    | typeof AmbiguousSendFailure
     | typeof Attachment
     | typeof AttachmentInput
     | typeof AuthenticationFailure
@@ -127,6 +142,13 @@ type PublicApiContract = {
     | typeof SendPolicyConfigInput
     | typeof SendPolicyViolation
     | typeof HtmlBody
+    | typeof IdempotencyKey
+    | typeof RetryAfter
+    | typeof SendFailureDisposition
+    | typeof SendFailureMetadata
+    | typeof SendOptions
+    | typeof SendOptionsInput
+    | typeof SendOptionsValidationFailure
     | typeof TransportUnavailableFailure
     | typeof Subject
     | typeof TextBody
@@ -143,13 +165,19 @@ type PublicApiContract = {
     | EmailHeaderValueShape
     | EmailMessageInputShape
     | HtmlBodyShape
+    | IdempotencyKeyShape
     | EmailSend
     | MailboxShape
     | MailboxInputShape
     | MediaTypeShape
     | MessageBodyShape
     | MessageBodyInputShape
+    | RetryAfterShape
     | SendFailure
+    | SendFailureDispositionShape
+    | SendFailureMetadataShape
+    | SendOptionsShape
+    | SendOptionsInputShape
     | SendPolicyConfig
     | SendReceipt
     | SubjectShape

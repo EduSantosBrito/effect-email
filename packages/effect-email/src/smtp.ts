@@ -7,6 +7,7 @@ import {
   ProviderProtocolFailure,
   RejectedMessageFailure,
   type SendFailure,
+  type SendOptions,
   SendPolicy,
   type SendReceipt,
   TransportUnavailableFailure,
@@ -82,14 +83,17 @@ export class SmtpConfig extends Context.Service<
 export class SmtpClient extends Context.Service<
   SmtpClient,
   {
-    readonly send: (message: EmailMessage) => Effect.Effect<SendReceipt, SendFailure>;
+    readonly send: (
+      message: EmailMessage,
+      options?: SendOptions,
+    ) => Effect.Effect<SendReceipt, SendFailure>;
   }
 >()("@effect-email/SmtpClient") {
   static readonly layer = (input: typeof SmtpClientInput.Type) => {
     const config = SmtpClientInput.make(input);
     return SmtpClient.of({
       ...config,
-      send: (message) => executeSmtpSend(config.transporter, message),
+      send: (message, options) => executeSmtpSend(config.transporter, message, options),
     });
   };
 }
@@ -97,13 +101,23 @@ export class SmtpClient extends Context.Service<
 const receiptFromInfo = (info: SmtpSentMessageInfo): Effect.Effect<SendReceipt, SendFailure> =>
   typeof info.messageId === "string" && info.messageId.trim().length > 0
     ? Effect.succeed({ provider: "smtp", messageId: info.messageId })
-    : Effect.fail(new ProviderProtocolFailure({ provider: "smtp", retryable: false }));
+    : Effect.fail(
+        new ProviderProtocolFailure({
+          provider: "smtp",
+          disposition: "permanent",
+          retryable: false,
+        }),
+      );
 
 const classifySmtpError = (error: unknown): SendFailure => {
   const value: NodemailerErrorLike = typeof error === "object" && error !== null ? error : {};
 
   if (value.responseCode === 535 || value.code === "EAUTH") {
-    return new AuthenticationFailure({ provider: "smtp", retryable: false });
+    return new AuthenticationFailure({
+      provider: "smtp",
+      disposition: "permanent",
+      retryable: false,
+    });
   }
 
   if (
@@ -111,15 +125,24 @@ const classifySmtpError = (error: unknown): SendFailure => {
     value.responseCode >= 400 &&
     value.responseCode < 600
   ) {
-    return new RejectedMessageFailure({ provider: "smtp", retryable: false });
+    return new RejectedMessageFailure({
+      provider: "smtp",
+      disposition: "permanent",
+      retryable: false,
+    });
   }
 
-  return new TransportUnavailableFailure({ provider: "smtp", retryable: true });
+  return new TransportUnavailableFailure({
+    provider: "smtp",
+    disposition: "retryable",
+    retryable: true,
+  });
 };
 
 const executeSmtpSend = (
   transporter: SmtpTransporter,
   message: EmailMessage,
+  _options?: SendOptions,
 ): Effect.Effect<SendReceipt, SendFailure> =>
   Effect.tryPromise({
     try: () => transporter.sendMail(mailOptions(message)),

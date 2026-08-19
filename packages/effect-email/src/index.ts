@@ -1,4 +1,4 @@
-import { Context, Data, Effect, Match, Option, Schema } from "effect";
+import { Context, Data, DateTime, Effect, Match, Option, Schema } from "effect";
 
 const addressPattern =
   /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
@@ -6,6 +6,10 @@ const mediaTypePattern =
   /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*(?:\s*;\s*[A-Za-z0-9!#$&^_.+-]+=[A-Za-z0-9!#$&^_.+-]+)*$/;
 const contentIdPattern = /^[^\s<>@]+@[^\s<>@]+$/u;
 const headerNamePattern = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+const idempotencyKeyPattern = /^[!-~]{1,256}$/;
+const printableAsciiPattern = /^[ -~]+$/;
+const canonicalHttpDatePattern =
+  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/;
 const forbiddenHeaderNames = new Set([
   "bcc",
   "cc",
@@ -32,6 +36,39 @@ const hasControlCharacter = (value: string): boolean =>
   [...value].some((character) => {
     const code = character.charCodeAt(0);
     return code < 32 || code === 127;
+  });
+
+const weekDays: readonly string[] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const months: readonly string[] = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+const twoDigits = (value: number): string => value.toString().padStart(2, "0");
+const isCanonicalHttpDate = (value: string): boolean =>
+  Option.match(DateTime.make(value), {
+    onNone: () => false,
+    onSome: (dateTime) => {
+      const parts = DateTime.toPartsUtc(dateTime);
+      const weekDay = weekDays[parts.weekDay];
+      const month = months[parts.month - 1];
+      return (
+        parts.millisecond === 0 &&
+        weekDay !== undefined &&
+        month !== undefined &&
+        `${weekDay}, ${twoDigits(parts.day)} ${month} ${parts.year.toString().padStart(4, "0")} ${twoDigits(parts.hour)}:${twoDigits(parts.minute)}:${twoDigits(parts.second)} GMT` ===
+          value
+      );
+    },
   });
 
 export const EmailAddress = Schema.String.check(
@@ -110,6 +147,12 @@ export const HtmlBody = Schema.String.check(
   }),
 ).pipe(Schema.brand("HtmlBody"));
 export type HtmlBody = typeof HtmlBody.Type;
+export const IdempotencyKey = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(256),
+  Schema.isPattern(idempotencyKeyPattern),
+).pipe(Schema.brand("IdempotencyKey"));
+export type IdempotencyKey = typeof IdempotencyKey.Type;
 
 export interface Mailbox {
   readonly address: EmailAddress;
@@ -193,10 +236,54 @@ const ParsedEmailMessage = Schema.Struct({
 type ParsedEmailMessage = typeof ParsedEmailMessage.Type;
 const encodeEmailMessage = Schema.encodeUnknownSync(ParsedEmailMessage);
 
+const SendOptionsTypeId = "~effect-email/SendOptions";
+export interface SendOptions {
+  readonly [SendOptionsTypeId]: typeof SendOptionsTypeId;
+  readonly idempotencyKey?: IdempotencyKey;
+}
+
 export interface SendReceipt {
   readonly provider: string;
   readonly messageId: string;
 }
+
+export const SendFailureDisposition = Schema.Literals(["permanent", "retryable", "ambiguous"]);
+export type SendFailureDisposition = typeof SendFailureDisposition.Type;
+
+const HttpStatus = Schema.Number.check(
+  Schema.isFinite(),
+  Schema.isInt(),
+  Schema.isBetween({ minimum: 100, maximum: 599 }),
+);
+const RetryAfterSeconds = Schema.Number.check(
+  Schema.isFinite(),
+  Schema.isInt(),
+  Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  Schema.makeFilter(Number.isSafeInteger, { expected: "a safe integer" }),
+);
+const RetryAfterHttpDate = Schema.String.check(
+  Schema.isPattern(canonicalHttpDatePattern),
+  Schema.makeFilter(isCanonicalHttpDate, { expected: "a canonical HTTP date" }),
+);
+
+export const RetryAfter = Schema.Union([
+  Schema.TaggedStruct("DelaySeconds", { seconds: RetryAfterSeconds }),
+  Schema.TaggedStruct("HttpDate", { value: RetryAfterHttpDate }),
+]);
+export type RetryAfter = typeof RetryAfter.Type;
+
+export const SendFailureMetadata = Schema.Struct({
+  status: Schema.optional(HttpStatus),
+  retryAfter: Schema.optional(RetryAfter),
+  requestId: Schema.optional(
+    Schema.String.check(
+      Schema.isNonEmpty(),
+      Schema.isMaxLength(256),
+      Schema.isPattern(printableAsciiPattern),
+    ),
+  ),
+});
+export type SendFailureMetadata = typeof SendFailureMetadata.Type;
 
 export const MailboxInput = Schema.Struct({
   address: Schema.Unknown,
@@ -229,6 +316,11 @@ export type EmailHeaderInput = typeof EmailHeaderInput.Type;
 
 export const EmailHeadersRecordInput = Schema.Record(Schema.String, Schema.Unknown);
 export type EmailHeadersRecordInput = typeof EmailHeadersRecordInput.Type;
+
+export const SendOptionsInput = Schema.Struct({
+  idempotencyKey: Schema.optional(Schema.Unknown),
+});
+export type SendOptionsInput = typeof SendOptionsInput.Type;
 
 export const EmailMessageInput = Schema.Struct({
   messageType: Schema.optional(Schema.Unknown),
@@ -322,6 +414,13 @@ export class EmailHeaderValidationFailure extends Schema.TaggedError<EmailHeader
   },
 ) {}
 
+export class SendOptionsValidationFailure extends Schema.TaggedError<SendOptionsValidationFailure>()(
+  "SendOptionsValidationFailure",
+  {
+    reason: Schema.Literals(["InvalidSendOptions", "InvalidIdempotencyKey"]),
+  },
+) {}
+
 export class SendPolicyViolation extends Schema.TaggedError<SendPolicyViolation>()(
   "SendPolicyViolation",
   {
@@ -341,33 +440,63 @@ export class SendPolicyViolation extends Schema.TaggedError<SendPolicyViolation>
       "TotalHeadersTooLarge",
     ]),
     limit: Schema.Number,
+    disposition: Schema.Literal("permanent"),
+    /** @deprecated Use `disposition` instead. */
     retryable: Schema.Literal(false),
   },
 ) {}
 
+const PermanentProviderFailureFields = {
+  provider: Schema.String,
+  metadata: Schema.optional(SendFailureMetadata),
+  disposition: Schema.Literal("permanent"),
+  /** @deprecated Use `disposition` instead. */
+  retryable: Schema.Literal(false),
+};
+
 export class AuthenticationFailure extends Schema.TaggedError<AuthenticationFailure>()(
   "AuthenticationFailure",
-  { provider: Schema.String, retryable: Schema.Literal(false) },
+  PermanentProviderFailureFields,
 ) {}
 
 export class RateLimitFailure extends Schema.TaggedError<RateLimitFailure>()("RateLimitFailure", {
   provider: Schema.String,
+  metadata: Schema.optional(SendFailureMetadata),
+  disposition: Schema.Literal("retryable"),
+  /** @deprecated Use `disposition` instead. */
   retryable: Schema.Literal(true),
 }) {}
 
 export class RejectedMessageFailure extends Schema.TaggedError<RejectedMessageFailure>()(
   "RejectedMessageFailure",
-  { provider: Schema.String, retryable: Schema.Literal(false) },
+  PermanentProviderFailureFields,
 ) {}
 
 export class TransportUnavailableFailure extends Schema.TaggedError<TransportUnavailableFailure>()(
   "TransportUnavailableFailure",
-  { provider: Schema.String, retryable: Schema.Literal(true) },
+  {
+    provider: Schema.String,
+    metadata: Schema.optional(SendFailureMetadata),
+    disposition: Schema.Literal("retryable"),
+    /** @deprecated Use `disposition` instead. */
+    retryable: Schema.Literal(true),
+  },
 ) {}
 
 export class ProviderProtocolFailure extends Schema.TaggedError<ProviderProtocolFailure>()(
   "ProviderProtocolFailure",
-  { provider: Schema.String, retryable: Schema.Literal(false) },
+  PermanentProviderFailureFields,
+) {}
+
+export class AmbiguousSendFailure extends Schema.TaggedError<AmbiguousSendFailure>()(
+  "AmbiguousSendFailure",
+  {
+    provider: Schema.String,
+    metadata: Schema.optional(SendFailureMetadata),
+    disposition: Schema.Literal("ambiguous"),
+    /** @deprecated Use `disposition` instead. */
+    retryable: Schema.Literal(false),
+  },
 ) {}
 
 export type SendFailure =
@@ -376,7 +505,8 @@ export type SendFailure =
   | RateLimitFailure
   | RejectedMessageFailure
   | TransportUnavailableFailure
-  | ProviderProtocolFailure;
+  | ProviderProtocolFailure
+  | AmbiguousSendFailure;
 
 const SendPolicyLimit = Schema.Number.check(
   Schema.isFinite(),
@@ -400,11 +530,16 @@ export const SendPolicyConfigInput = Schema.Struct({
 
 export type SendPolicyConfig = typeof SendPolicyConfigInput.Type;
 
-export type EmailSend = (message: EmailMessage) => Effect.Effect<SendReceipt, SendFailure>;
+export type EmailSend = (
+  message: EmailMessage,
+  options?: SendOptions,
+) => Effect.Effect<SendReceipt, SendFailure>;
 const EmailSendSchema = Schema.declare<EmailSend>(
   (input): input is EmailSend => typeof input === "function",
 );
 
+const decodeIdempotencyKey = Schema.decodeUnknownEffect(IdempotencyKey);
+const decodeSendOptionsInput = Schema.decodeUnknownEffect(SendOptionsInput);
 const decodeEmailAddress = Schema.decodeUnknownEffect(EmailAddress);
 const decodeDisplayName = Schema.decodeUnknownEffect(DisplayName);
 const decodeMediaType = Schema.decodeUnknownEffect(MediaType);
@@ -459,6 +594,24 @@ const arrayFromOptionalInput = (input: unknown): readonly unknown[] =>
     onNone: () => [],
     onSome: (value) => (Array.isArray(value) ? value : [value]),
   });
+
+const parseSendOptions: (
+  input: unknown,
+) => Effect.Effect<SendOptions, SendOptionsValidationFailure> = Effect.fnUntraced(
+  function* (input) {
+    const raw = yield* decodeSendOptionsInput(input).pipe(
+      Effect.mapError(() => new SendOptionsValidationFailure({ reason: "InvalidSendOptions" })),
+    );
+    const idempotencyKeyInput = optionalValue(raw.idempotencyKey);
+    if (idempotencyKeyInput === undefined) {
+      return { [SendOptionsTypeId]: SendOptionsTypeId };
+    }
+    const idempotencyKey = yield* decodeIdempotencyKey(idempotencyKeyInput).pipe(
+      Effect.mapError(() => new SendOptionsValidationFailure({ reason: "InvalidIdempotencyKey" })),
+    );
+    return { [SendOptionsTypeId]: SendOptionsTypeId, idempotencyKey };
+  },
+);
 
 const optionalLength = <A>(input: readonly A[] | undefined): number =>
   Option.match(Option.fromUndefinedOr(input), {
@@ -788,7 +941,12 @@ const sendPolicyViolation = (
     () => [],
   );
   const violation = (reason: SendPolicyViolation["reason"], limit: number) =>
-    new SendPolicyViolation({ reason, limit, retryable: false });
+    new SendPolicyViolation({
+      reason,
+      limit,
+      disposition: "permanent",
+      retryable: false,
+    });
 
   return Match.value({
     recipientCount: message.to.length + optionalLength(message.cc) + optionalLength(message.bcc),
@@ -1006,6 +1164,10 @@ export const EmailMessage = {
   make: parseEmailMessage,
 };
 
+export const SendOptions = {
+  make: parseSendOptions,
+};
+
 const textBodyBytes = MessageBody.$match({
   TextOnly: ({ text }) => utf8Bytes(text),
   HtmlOnly: () => 0,
@@ -1069,14 +1231,20 @@ const EmailInput = Schema.Struct({
 export class Email extends Context.Service<
   Email,
   {
-    readonly send: (message: EmailMessage) => Effect.Effect<SendReceipt, SendFailure>;
+    readonly send: (
+      message: EmailMessage,
+      options?: SendOptions,
+    ) => Effect.Effect<SendReceipt, SendFailure>;
   }
 >()("@effect-email/Email") {
   static readonly layer = (input: typeof EmailInput.Type) => {
     const config = EmailInput.make(input);
     return Email.of({
       ...config,
-      send: (message) => config.policy.validate(message).pipe(Effect.flatMap(config.send)),
+      send: (message, options) =>
+        config.policy
+          .validate(message)
+          .pipe(Effect.flatMap((validatedMessage) => config.send(validatedMessage, options))),
     });
   };
 }

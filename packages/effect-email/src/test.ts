@@ -4,6 +4,7 @@ import {
   type EmailMessage,
   SendPolicy,
   type SendFailure,
+  type SendOptions,
   type SendReceipt,
 } from "./index.js";
 
@@ -47,14 +48,17 @@ export class TestEmailInspection extends Context.Service<
 export class TestEmailAdapter extends Context.Service<
   TestEmailAdapter,
   {
-    readonly send: (message: EmailMessage) => Effect.Effect<SendReceipt, SendFailure>;
+    readonly send: (
+      message: EmailMessage,
+      options?: SendOptions,
+    ) => Effect.Effect<SendReceipt, SendFailure>;
   }
 >()("@effect-email/TestEmailAdapter") {
   static readonly layer = (input: typeof TestEmailAdapterInput.Type) => {
     const config = TestEmailAdapterInput.make(input);
     return TestEmailAdapter.of({
       ...config,
-      send: (message) =>
+      send: (message, _options) =>
         config.inspection
           .record(message)
           .pipe(

@@ -63,6 +63,18 @@ _Avoid_: Browser provider adapter
 A transport-only setting that is not part of the provider-neutral **Email Message** contract.
 _Avoid_: Core field
 
+**Send Attempt**:
+One invocation of the **Email Service** with an **Email Message** and optional parsed **Send Options**.
+_Avoid_: Email Message mutation
+
+**Send Options**:
+Provider-neutral parsed state that configures one **Send Attempt** without becoming part of the **Email Message**.
+_Avoid_: Provider options bag
+
+**Idempotency Key**:
+An optional visible-ASCII identifier on **Send Options** that a capable **Transport Adapter** may use to deduplicate repeated attempts within its declared guarantee.
+_Avoid_: Email Header, SMTP Message ID, universal retry guarantee
+
 **Attachment**:
 A named content part included with an **Email Message**.
 
@@ -113,8 +125,16 @@ The message identifier reported by the **SMTP Adapter** after provider acceptanc
 _Avoid_: Delivery proof, dedupe key
 
 **Send Failure**:
-A classified failure that prevented a **Transport Adapter** from accepting an **Email Message**.
-_Avoid_: Raw provider error
+A closed classified failure from a **Send Attempt**, with a permanent, retryable, or ambiguous disposition.
+_Avoid_: Raw provider error, defect, interruption
+
+**Ambiguous Send Failure**:
+A **Send Failure** where provider acceptance may have occurred but no valid **Send Receipt** is available.
+_Avoid_: Retryable failure
+
+**Send Failure Metadata**:
+Bounded operational metadata containing only a validated HTTP status, structured Retry-After value, or limited request ID.
+_Avoid_: Raw provider body, generic headers, cause, credential, Email PII
 
 **SMTP Failure Mapping**:
 Classification of Nodemailer failures into the existing provider-neutral **Send Failure** taxonomy.
@@ -149,7 +169,15 @@ _Avoid_: Public root client
 - An **Email Message** has at least one recipient across to, cc, and bcc.
 - An **Email Message** rejects duplicate recipients across to, cc, and bcc.
 - Sending an **Email Message** returns a **Send Receipt** when the transport accepts it.
+- Each **Send Attempt** may include parsed **Send Options**; omitting them or their **Idempotency Key** creates a non-idempotent attempt.
+- **Send Options** are validated through Effect before **Send Policy** evaluation or **Transport Adapter** effects.
+- An **Idempotency Key** belongs to the **Send Attempt**, not the **Email Message**.
 - Sending an **Email Message** can fail with a **Send Failure**.
+- Every **Send Failure** has exactly one disposition: permanent, retryable, or ambiguous.
+- An **Ambiguous Send Failure** is not generally safe to retry; a separately declared adapter deduplication guarantee may reduce **Duplicate Send** risk.
+- The deprecated `retryable` compatibility field is true only for retryable disposition and false for permanent and ambiguous dispositions.
+- **Send Failure Metadata** is optional and allowlisted; it never exposes raw bodies, generic headers, causes, credentials, or **Email PII**.
+- Defects and fiber interruption remain outside the **Send Failure** channel.
 - The first **SMTP Adapter** slice maps Nodemailer errors into the existing **Send Failure** classes instead of adding SMTP-specific public error types.
 - **SMTP Failure Mapping** treats authentication errors as **AuthenticationFailure**, recipient or message rejection as **RejectedMessageFailure**, connection, TLS, and timeout problems as **TransportUnavailableFailure**, and malformed transport responses as **ProviderProtocolFailure**.
 - The **SMTP Adapter** returns `provider: "smtp"` in its **Send Receipt**.
@@ -161,13 +189,18 @@ _Avoid_: Public root client
 - The MVP excludes the **SMTP Adapter** because direct SMTP has larger security and protocol surface area.
 - The next provider-neutral package step is an **SMTP Adapter** using the current **Email Message** surface only.
 - The first **SMTP Adapter** slice must support the whole current **Email Message** surface: text body, HTML body, attachments, inline attachments, and **Email Headers**.
-- A second real **Transport Adapter** should prove the core contract before adding provider-shaped capabilities such as tags, scheduling, templates, idempotency keys, webhooks, or provider metadata.
+- A second real **Transport Adapter** should prove the core contract before adding provider-shaped capabilities such as tags, scheduling, templates, webhooks, or provider metadata.
 - The **SMTP Adapter** subpath is named for the provider-neutral capability (`effect-email/smtp`), not the implementation library.
 - The **SMTP Adapter** is implemented with Nodemailer because SMTP protocol maturity is more important than TypeScript-native internals.
 - The **SMTP Adapter** exports an **SMTP Client Service** from `effect-email/smtp` for testability and custom Layer composition.
 - The **SMTP Client Service** is not exported from the provider-neutral root API.
 - A **Test Adapter** exposes sent **Email Messages** for assertions without global state.
 - A **Provider-Specific Option** does not belong in the core **Email Message** contract.
+- **Idempotency Key** is provider-neutral **Send Options** state, but each **Transport Adapter** declares its own guarantee.
+- The **Resend Adapter** provides provider-backed deduplication only within Resend's documented retention window.
+- The **Test Adapter** provides deterministic deduplication for the lifetime of its Layer.
+- The **SMTP Adapter** accepts common **Send Options** but does not deduplicate or translate the **Idempotency Key** into SMTP state.
+- The SDK owns no persistent idempotency coordinator and performs no automatic retry.
 - A **Provider Secret** is supplied as redacted Effect configuration, not as a plain string.
 - A provider-backed **Transport Adapter** runs only in a **Trusted Runtime**.
 - An **SMTP Credential** is supplied as redacted Effect configuration, while non-secret SMTP connection settings such as host, port, and secure mode are regular Effect configuration.
@@ -177,7 +210,7 @@ _Avoid_: Public root client
 - OAuth2 and advanced SMTP authentication are deferred until the basic **SMTP Adapter** contract is proven.
 - **SMTP Secure Mode** follows Nodemailer semantics: enabled means implicit TLS on connect, disabled still allows STARTTLS upgrade when the server supports it.
 - The MVP **Email Message** surface includes from, to, cc, bcc, reply-to, subject, text, HTML, and **Attachments**.
-- The MVP excludes custom headers, tags, scheduling, batch sending, templates, idempotency keys, webhooks, and provider metadata.
+- The MVP excludes tags, scheduling, batch sending, templates, webhooks, and provider metadata.
 - An **Email Message** has at least one non-empty body: text, HTML, or both.
 - An **Email Message** may contain **Email Headers** as an ordered list.
 - An **Email Message** contains **Parsed Email Fields**, not raw external input.
@@ -304,8 +337,11 @@ _Avoid_: Public root client
 > **Dev:** "Can a display name contain non-English text?"
 > **Domain expert:** "Yes, but it is validated as safe display text, not raw header syntax."
 
-> **Dev:** "Should the next package step add Resend idempotency keys?"
-> **Domain expert:** "No. Idempotency keys are provider-specific, so the next step should stay provider-neutral."
+> **Dev:** "Is an Idempotency Key a Resend-only option?"
+> **Domain expert:** "No. It is provider-neutral Send Options state for one Send Attempt, but each Transport Adapter declares a different deduplication guarantee."
+
+> **Dev:** "Does passing an Idempotency Key make an SMTP retry safe?"
+> **Domain expert:** "No. SMTP accepts the common Send Options shape but does not deduplicate or translate the key into Message-ID or an Email Header."
 
 > **Dev:** "Should the next package step add an SMTP Adapter?"
 > **Domain expert:** "Yes. Add an SMTP Adapter using the current Email Message surface only, so a second real transport proves the core contract before new message capabilities are added."

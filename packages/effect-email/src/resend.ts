@@ -13,6 +13,7 @@ import {
   RateLimitFailure,
   RejectedMessageFailure,
   type SendFailure,
+  type SendOptions,
   SendPolicy,
   type SendReceipt,
   TransportUnavailableFailure,
@@ -65,39 +66,69 @@ export class ResendConfig extends Context.Service<
 export class ResendClient extends Context.Service<
   ResendClient,
   {
-    readonly send: (message: EmailMessage) => Effect.Effect<SendReceipt, SendFailure>;
+    readonly send: (
+      message: EmailMessage,
+      options?: SendOptions,
+    ) => Effect.Effect<SendReceipt, SendFailure>;
   }
 >()("@effect-email/ResendClient") {
   static readonly layer = (input: typeof ResendClientInput.Type) => {
     const config = ResendClientInput.make(input);
     return ResendClient.of({
       ...config,
-      send: (message) =>
-        executeResendSend(config.client, Redacted.value(config.resend.apiKey), message),
+      send: (message, options) =>
+        executeResendSend(config.client, Redacted.value(config.resend.apiKey), message, options),
     });
   };
 }
 
 const classifyStatus = (status: number): SendFailure => {
+  const metadata = { status };
   if (status === 401 || status === 403) {
-    return new AuthenticationFailure({ provider: "resend", retryable: false });
+    return new AuthenticationFailure({
+      provider: "resend",
+      metadata,
+      disposition: "permanent",
+      retryable: false,
+    });
   }
   if (status === 429) {
-    return new RateLimitFailure({ provider: "resend", retryable: true });
+    return new RateLimitFailure({
+      provider: "resend",
+      metadata,
+      disposition: "retryable",
+      retryable: true,
+    });
   }
   if (status >= 400 && status < 500) {
-    return new RejectedMessageFailure({ provider: "resend", retryable: false });
+    return new RejectedMessageFailure({
+      provider: "resend",
+      metadata,
+      disposition: "permanent",
+      retryable: false,
+    });
   }
   if (status >= 500) {
-    return new TransportUnavailableFailure({ provider: "resend", retryable: true });
+    return new TransportUnavailableFailure({
+      provider: "resend",
+      metadata,
+      disposition: "retryable",
+      retryable: true,
+    });
   }
-  return new ProviderProtocolFailure({ provider: "resend", retryable: false });
+  return new ProviderProtocolFailure({
+    provider: "resend",
+    metadata,
+    disposition: "permanent",
+    retryable: false,
+  });
 };
 
 const executeResendSend = (
   client: HttpClient.HttpClient,
   token: string,
   message: EmailMessage,
+  _options?: SendOptions,
 ): Effect.Effect<SendReceipt, SendFailure> =>
   HttpClientRequest.post("https://api.resend.com/emails").pipe(
     HttpClientRequest.bearerToken(token),
@@ -108,6 +139,7 @@ const executeResendSend = (
       () =>
         new TransportUnavailableFailure({
           provider: "resend",
+          disposition: "retryable",
           retryable: true,
         }),
     ),
@@ -125,6 +157,7 @@ const executeResendSend = (
               () =>
                 new ProviderProtocolFailure({
                   provider: "resend",
+                  disposition: "permanent",
                   retryable: false,
                 }),
             ),
