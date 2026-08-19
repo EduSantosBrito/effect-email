@@ -1,10 +1,10 @@
 import { Option } from "effect";
-import { MessageBody, type EmailMessage, type Mailbox } from "../index";
+import { MessageBody, type EmailMessage, type Mailbox } from "../index.js";
 
 interface SmtpAttachment {
   readonly filename: string;
   readonly contentType: string;
-  readonly content: Buffer<ArrayBufferLike>;
+  readonly content: Uint8Array<ArrayBufferLike>;
   readonly cid?: string;
 }
 

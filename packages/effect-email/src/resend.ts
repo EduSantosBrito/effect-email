@@ -16,8 +16,8 @@ import {
   SendPolicy,
   type SendReceipt,
   TransportUnavailableFailure,
-} from "./index";
-import { requestBody } from "./internal/resend-request";
+} from "./index.js";
+import { requestBody } from "./internal/resend-request.js";
 
 export const ResendConfigInput = Schema.Struct({
   apiKey: Schema.Redacted(Schema.String),

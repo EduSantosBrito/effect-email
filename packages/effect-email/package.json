@@ -57,14 +57,13 @@
     "format:check": "bun --bun oxfmt --check package.json tsconfig.json src",
     "knip": "bunx knip",
     "lint": "bun --bun oxlint -c ../../oxlint.config.ts src",
-    "package:smoke": "bun run build && npm pack --dry-run",
+    "package:smoke": "bun ./test/package-smoke/run.mjs",
     "prepack": "bun run build",
     "test": "bun --bun vitest run src",
     "type-test": "bun --bun tstyche --root . --tsconfig ./tsconfig.tstyche.json",
     "prepare": "bun --bun effect-tsgo patch"
   },
   "dependencies": {
-    "effect": "4.0.0-rc.110",
     "nodemailer": "8.0.7"
   },
   "devDependencies": {
@@ -75,11 +74,15 @@
     "@types/nodemailer": "8.0.0",
     "@typescript/native-preview": "catalog:",
     "bun-types": "catalog:",
+    "effect": "catalog:",
     "effect-rules": "catalog:",
     "knip": "catalog:",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
     "tstyche": "catalog:",
     "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "4.0.0-rc.110"
   }
 }

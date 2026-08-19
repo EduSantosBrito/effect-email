@@ -1,5 +1,4 @@
 import nodemailer from "nodemailer";
-import type SMTPTransport from "nodemailer/lib/smtp-transport";
 import { Config, Context, Effect, Layer, Redacted, Schema } from "effect";
 import {
   AuthenticationFailure,
@@ -11,8 +10,8 @@ import {
   SendPolicy,
   type SendReceipt,
   TransportUnavailableFailure,
-} from "./index";
-import { mailOptions, type SmtpMailOptions } from "./internal/smtp-mail-options";
+} from "./index.js";
+import { mailOptions, type SmtpMailOptions } from "./internal/smtp-mail-options.js";
 
 const SmtpPort = Schema.Number.check(Schema.isFinite(), Schema.isInt(), Schema.isGreaterThan(0));
 
@@ -45,8 +44,12 @@ export const makeConfig = (
   input: Omit<SmtpConfigInput, "password"> & { readonly password: string },
 ): SmtpConfigInput => SmtpConfigInput.make({ ...input, password: Redacted.make(input.password) });
 
+interface SmtpSentMessageInfo {
+  readonly messageId?: unknown;
+}
+
 interface SmtpTransporter {
-  readonly sendMail: (options: SmtpMailOptions) => PromiseLike<SMTPTransport.SentMessageInfo>;
+  readonly sendMail: (options: SmtpMailOptions) => PromiseLike<SmtpSentMessageInfo>;
 }
 
 const SmtpTransporterInput = Schema.declare<SmtpTransporter>(
@@ -91,9 +94,7 @@ export class SmtpClient extends Context.Service<
   };
 }
 
-const receiptFromInfo = (
-  info: SMTPTransport.SentMessageInfo,
-): Effect.Effect<SendReceipt, SendFailure> =>
+const receiptFromInfo = (info: SmtpSentMessageInfo): Effect.Effect<SendReceipt, SendFailure> =>
   typeof info.messageId === "string" && info.messageId.trim().length > 0
     ? Effect.succeed({ provider: "smtp", messageId: info.messageId })
     : Effect.fail(new ProviderProtocolFailure({ provider: "smtp", retryable: false }));
@@ -146,7 +147,22 @@ export const clientLayer: Layer.Layer<SmtpClient, never, SmtpConfig> = Layer.eff
       },
     });
     return SmtpClient.layer({
-      transporter: { sendMail: (options) => transporter.sendMail(options) },
+      transporter: {
+        sendMail: (options) => {
+          const { attachments, ...rest } = options;
+          return transporter.sendMail(
+            attachments === undefined
+              ? rest
+              : {
+                  ...rest,
+                  attachments: attachments.map((attachment) => ({
+                    ...attachment,
+                    content: Buffer.from(attachment.content),
+                  })),
+                },
+          );
+        },
+      },
     });
   }).pipe(Effect.annotateLogs({ service: "@effect-email/SmtpClient" })),
 );

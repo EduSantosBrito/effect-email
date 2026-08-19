@@ -1,5 +1,5 @@
 import { Option, Schema, SchemaTransformation } from "effect";
-import { MessageBody, type EmailMessage, type Mailbox } from "../index";
+import { MessageBody, type EmailMessage, type Mailbox } from "../index.js";
 
 const encodeAttachment = (content: Uint8Array): string => Buffer.from(content).toString("base64");
 

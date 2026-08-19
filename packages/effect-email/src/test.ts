@@ -1,5 +1,11 @@
 import { Context, Effect, Layer, Ref, Schema } from "effect";
-import { Email, type EmailMessage, SendPolicy, type SendFailure, type SendReceipt } from "./index";
+import {
+  Email,
+  type EmailMessage,
+  SendPolicy,
+  type SendFailure,
+  type SendReceipt,
+} from "./index.js";
 
 const TestEmailInspectionState = Schema.declare<Ref.Ref<readonly EmailMessage[]>>(
   (input): input is Ref.Ref<readonly EmailMessage[]> => input !== undefined && input !== null,
