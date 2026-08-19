@@ -114,7 +114,10 @@ _Avoid_: Raw string
 Caller-owned HTML content included in an **Email Message** without SDK sanitization.
 
 **Test Adapter**:
-A **Transport Adapter** used by tests to inspect requested email sends through Effect state without contacting an external provider.
+A deterministic fake **Transport Adapter** used to script send outcomes and inspect attempts and accepted **Email Messages** through Effect state without contacting an external provider.
+
+**Test Control**:
+The public test capability that enqueues deterministic **Test Adapter** outcomes and resets its Layer-local state.
 
 **Send Receipt**:
 Proof that a **Transport Adapter** accepted an **Email Message** for delivery.
@@ -194,7 +197,10 @@ _Avoid_: Public root client
 - The **SMTP Adapter** is implemented with Nodemailer because SMTP protocol maturity is more important than TypeScript-native internals.
 - The **SMTP Adapter** exports an **SMTP Client Service** from `effect-email/smtp` for testability and custom Layer composition.
 - The **SMTP Client Service** is not exported from the provider-neutral root API.
-- A **Test Adapter** exposes sent **Email Messages** for assertions without global state.
+- A **Test Adapter** exposes attempts and accepted **Email Messages** separately for assertions without global state.
+- **Test Control** scripts acceptance, rate limiting, timeout before acceptance, ambiguous failure after possible acceptance, and permanent failure; an exhausted script accepts by default.
+- A **Test Adapter** deduplication hit returns the original **Send Receipt** without consuming a scripted outcome or recording a second acceptance.
+- A **Test Adapter** reset clears its script, attempts, acceptances, receipt sequence, and Layer-local deduplication state.
 - A **Provider-Specific Option** does not belong in the core **Email Message** contract.
 - **Idempotency Key** is provider-neutral **Send Options** state, but each **Transport Adapter** declares its own guarantee.
 - The **Resend Adapter** provides provider-backed deduplication only within Resend's documented retention window.

@@ -101,11 +101,15 @@ import {
 } from "effect-email/smtp";
 import {
   TestEmailAdapter,
+  TestEmailControl,
   TestEmailInspection,
+  TestEmailOutcome,
   defaultLayer as testDefaultLayer,
   layer as testLayer,
   policyConfig as testPolicyConfig,
   policyLayer as testPolicyLayer,
+  type TestEmailAttempt,
+  type TestEmailOutcome as TestEmailOutcomeShape,
 } from "effect-email/test";
 
 type PublicApiContract = {
@@ -209,11 +213,15 @@ type PublicApiContract = {
     | SmtpConfigShape;
   readonly test:
     | typeof TestEmailAdapter
+    | typeof TestEmailControl
     | typeof TestEmailInspection
+    | typeof TestEmailOutcome
     | typeof testDefaultLayer
     | typeof testLayer
     | typeof testPolicyConfig
-    | typeof testPolicyLayer;
+    | typeof testPolicyLayer
+    | TestEmailAttempt
+    | TestEmailOutcomeShape;
 };
 
 export type { PublicApiContract };

@@ -10,7 +10,9 @@ import * as Test from "effect-email/test";
 
 assert.equal(typeof Resend.ResendClient, "function");
 assert.equal(typeof Resend.layer, "object");
+assert.equal(typeof Test.TestEmailControl, "function");
 assert.equal(typeof Test.TestEmailInspection, "function");
+assert.equal(typeof Test.TestEmailOutcome.Accept, "function");
 assert.equal(typeof Test.defaultLayer, "object");
 
 const message = await Effect.runPromise(
@@ -31,7 +33,7 @@ const program = Effect.gen(function* () {
 });
 
 const result = await Effect.runPromise(program.pipe(Effect.provide(Test.defaultLayer)));
-assert.deepEqual(result.receipt, { provider: "test", messageId: "test-message-id" });
+assert.deepEqual(result.receipt, { provider: "test", messageId: "test-message-1" });
 assert.equal(result.sent.length, 1);
 assert.equal(result.sent[0], message);
 

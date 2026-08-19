@@ -1,7 +1,13 @@
 import { Effect, Redacted } from "effect";
 import { Email, EmailMessage, type SendFailure, type SendReceipt } from "effect-email";
 import { ResendClient, type ResendConfigInput } from "effect-email/resend";
-import { TestEmailInspection, defaultLayer } from "effect-email/test";
+import {
+  TestEmailControl,
+  TestEmailInspection,
+  TestEmailOutcome,
+  defaultLayer,
+  type TestEmailAttempt,
+} from "effect-email/test";
 
 const program = Effect.gen(function* () {
   const message = yield* EmailMessage.make({
@@ -21,5 +27,8 @@ type PublishedSendResult = SendReceipt | SendFailure;
 void runnable;
 void ResendClient;
 void resendConfig;
+void TestEmailControl;
 void TestEmailInspection;
+void TestEmailOutcome.Accept();
+void (null as unknown as TestEmailAttempt);
 void (null as unknown as PublishedSendResult);
