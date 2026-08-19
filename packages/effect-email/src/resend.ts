@@ -1,18 +1,35 @@
-import { Config, Context, Effect, Layer, Redacted, Schema } from "effect";
+import {
+  Cause,
+  Config,
+  Context,
+  Data,
+  DateTime,
+  Effect,
+  Layer,
+  Option,
+  Predicate,
+  Redacted,
+  Schema,
+} from "effect";
 import {
   FetchHttpClient,
+  Headers,
   HttpClient,
   HttpClientRequest,
   HttpClientResponse,
 } from "effect/unstable/http";
 import {
+  AmbiguousSendFailure,
   AuthenticationFailure,
   Email,
   type EmailMessage,
   ProviderProtocolFailure,
   RateLimitFailure,
   RejectedMessageFailure,
+  RetryAfter,
+  type RetryAfter as RetryAfterShape,
   type SendFailure,
+  type SendFailureMetadata,
   type SendOptions,
   SendPolicy,
   type SendReceipt,
@@ -50,7 +67,14 @@ const ResendClientInput = Schema.Struct({
   resend: ResendConfigServiceInput,
 });
 
-const ResendSuccess = Schema.Struct({ id: Schema.String });
+const ResendSuccess = Schema.Struct({
+  id: Schema.String.check(
+    Schema.isNonEmpty(),
+    Schema.makeFilter((value: string) => value.trim().length > 0, {
+      expected: "a non-blank Resend message ID",
+    }),
+  ),
+});
 const decodeResendSuccess = Schema.decodeUnknownEffect(ResendSuccess);
 
 export class ResendConfig extends Context.Service<
@@ -82,8 +106,80 @@ export class ResendClient extends Context.Service<
   };
 }
 
-const classifyStatus = (status: number): SendFailure => {
-  const metadata = { status };
+const delaySecondsPattern = /^\d+$/;
+const imfFixdatePattern =
+  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (?:0[1-9]|[12]\d|3[01]) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/;
+const rfc850DatePattern =
+  /^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (?:0[1-9]|[12]\d|3[01])-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} \d{2}:\d{2}:\d{2} GMT$/;
+const asctimeDatePattern =
+  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (?: [1-9]|[12]\d|3[01]) \d{2}:\d{2}:\d{2} \d{4}$/;
+const printableRequestIdPattern = /^[ -~]{1,256}$/;
+const weekDays: readonly string[] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const months: readonly string[] = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+const decodeRetryAfter = Schema.decodeUnknownOption(RetryAfter);
+const RetryAfterVariants = Data.taggedEnum<RetryAfterShape>();
+const twoDigits = (value: number): string => value.toString().padStart(2, "0");
+
+const parseRetryAfter = (value: string | undefined): RetryAfterShape | undefined => {
+  if (value === undefined) return undefined;
+  if (delaySecondsPattern.test(value)) {
+    const seconds = Number(value);
+    return Option.getOrUndefined(decodeRetryAfter(RetryAfterVariants.DelaySeconds({ seconds })));
+  }
+  if (
+    !imfFixdatePattern.test(value) &&
+    !rfc850DatePattern.test(value) &&
+    !asctimeDatePattern.test(value)
+  ) {
+    return undefined;
+  }
+  return Option.match(DateTime.make(value), {
+    onNone: () => undefined,
+    onSome: (dateTime) => {
+      const parts = DateTime.toPartsUtc(dateTime);
+      const weekDay = weekDays[parts.weekDay];
+      const month = months[parts.month - 1];
+      if (parts.millisecond !== 0 || weekDay === undefined || month === undefined) return undefined;
+      const canonical = `${weekDay}, ${twoDigits(parts.day)} ${month} ${parts.year.toString().padStart(4, "0")} ${twoDigits(parts.hour)}:${twoDigits(parts.minute)}:${twoDigits(parts.second)} GMT`;
+      return Option.getOrUndefined(
+        decodeRetryAfter(RetryAfterVariants.HttpDate({ value: canonical })),
+      );
+    },
+  });
+};
+
+const responseMetadata = (response: HttpClientResponse.HttpClientResponse): SendFailureMetadata => {
+  const retryAfter = parseRetryAfter(
+    Option.getOrUndefined(Headers.get(response.headers, "retry-after")),
+  );
+  const rawRequestId = Option.getOrUndefined(Headers.get(response.headers, "x-request-id"));
+  const requestId =
+    rawRequestId !== undefined && printableRequestIdPattern.test(rawRequestId)
+      ? rawRequestId
+      : undefined;
+  return {
+    ...(Number.isInteger(response.status) && response.status >= 100 && response.status <= 599
+      ? { status: response.status }
+      : {}),
+    ...(retryAfter !== undefined ? { retryAfter } : {}),
+    ...(requestId !== undefined ? { requestId } : {}),
+  };
+};
+
+const classifyStatus = (status: number, metadata: SendFailureMetadata): SendFailure => {
   if (status === 401 || status === 403) {
     return new AuthenticationFailure({
       provider: "resend",
@@ -108,7 +204,7 @@ const classifyStatus = (status: number): SendFailure => {
       retryable: false,
     });
   }
-  if (status >= 500) {
+  if (status >= 500 && status < 600) {
     return new TransportUnavailableFailure({
       provider: "resend",
       metadata,
@@ -128,21 +224,26 @@ const executeResendSend = (
   client: HttpClient.HttpClient,
   token: string,
   message: EmailMessage,
-  _options?: SendOptions,
+  options?: SendOptions,
 ): Effect.Effect<SendReceipt, SendFailure> =>
   HttpClientRequest.post("https://api.resend.com/emails").pipe(
     HttpClientRequest.bearerToken(token),
     HttpClientRequest.acceptJson,
-    HttpClientRequest.bodyJson(requestBody(message)),
-    Effect.flatMap(client.execute),
-    Effect.mapError(
-      () =>
-        new TransportUnavailableFailure({
-          provider: "resend",
-          disposition: "retryable",
-          retryable: true,
-        }),
-    ),
+    HttpClientRequest.setHeaders({ "Idempotency-Key": options?.idempotencyKey }),
+    HttpClientRequest.bodyJsonUnsafe(requestBody(message)),
+    client.execute,
+    Effect.catch((error) => {
+      if (error.response !== undefined) return Effect.succeed(error.response);
+      return Predicate.isTagged(error.reason, "TransportError")
+        ? Effect.fail(
+            new AmbiguousSendFailure({
+              provider: "resend",
+              disposition: "ambiguous",
+              retryable: false,
+            }),
+          )
+        : Effect.failCause(Cause.die(error));
+    }),
     Effect.flatMap((response) =>
       response.status >= 200 && response.status < 300
         ? HttpClientResponse.schemaBodyJson(ResendSuccess)(response).pipe(
@@ -155,14 +256,15 @@ const executeResendSend = (
             ),
             Effect.mapError(
               () =>
-                new ProviderProtocolFailure({
+                new AmbiguousSendFailure({
                   provider: "resend",
-                  disposition: "permanent",
+                  metadata: responseMetadata(response),
+                  disposition: "ambiguous",
                   retryable: false,
                 }),
             ),
           )
-        : Effect.fail(classifyStatus(response.status)),
+        : Effect.fail(classifyStatus(response.status, responseMetadata(response))),
     ),
   );
 

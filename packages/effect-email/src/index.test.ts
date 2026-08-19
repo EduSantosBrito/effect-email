@@ -71,6 +71,9 @@ const ResendRequestBodySchema = Schema.Struct({
 });
 
 const decodeResendRequestBody = Schema.decodeUnknownEffect(ResendRequestBodySchema);
+const decodeResendRequestJson = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(ResendRequestBodySchema),
+);
 const decodeEmailAddress = Schema.decodeUnknownEffect(EmailAddress);
 const decodeDisplayName = Schema.decodeUnknownEffect(DisplayName);
 const decodeEmailHeaderName = Schema.decodeUnknownEffect(EmailHeaderName);
@@ -1053,6 +1056,81 @@ describe("effect-email Resend adapter", () => {
     }),
   );
 
+  it.effect("encodes attachment bytes without a global Buffer", () =>
+    Effect.gen(function* () {
+      const seen = yield* Ref.make<typeof ResendRequestBodySchema.Type | undefined>(undefined);
+      const client = HttpClient.make((request) =>
+        Result.match(HttpClientRequest.toWebResult(request), {
+          onFailure: (cause) =>
+            Effect.fail(
+              new HttpClientError.HttpClientError({
+                reason: new HttpClientError.EncodeError({ request, cause }),
+              }),
+            ),
+          onSuccess: (web) =>
+            Effect.promise(() => web.text()).pipe(
+              Effect.flatMap(decodeResendRequestJson),
+              Effect.tap((body) => Ref.set(seen, body)),
+              Effect.as(
+                HttpClientResponse.fromWeb(
+                  request,
+                  new Response('{"id":"resend-id"}', { status: 200 }),
+                ),
+              ),
+              Effect.mapError(
+                (cause) =>
+                  new HttpClientError.HttpClientError({
+                    reason: new HttpClientError.EncodeError({ request, cause }),
+                  }),
+              ),
+            ),
+        }),
+      );
+      const vectors = [
+        [],
+        [0],
+        [0, 1],
+        [0, 1, 2],
+        [0, 1, 2, 3],
+        [0, 1, 2, 3, 4],
+        [0, 1, 2, 3, 4, 5],
+        [255, 254, 253],
+      ];
+      const message = yield* makeMessage({
+        attachments: vectors.map((content, index) => ({
+          name: `vector-${index.toString()}.bin`,
+          mediaType: "application/octet-stream",
+          content: new Uint8Array(content),
+        })),
+      });
+
+      const body = yield* Effect.acquireUseRelease(
+        Effect.sync(() => {
+          const descriptor = Object.getOwnPropertyDescriptor(globalThis, "Buffer");
+          Reflect.deleteProperty(globalThis, "Buffer");
+          return descriptor;
+        }),
+        () =>
+          Effect.gen(function* () {
+            const email = yield* Email;
+            yield* email.send(message);
+            return yield* Ref.get(seen);
+          }).pipe(Effect.provide(provideResend(client))),
+        (descriptor) =>
+          Effect.sync(() => {
+            if (descriptor !== undefined) {
+              Object.defineProperty(globalThis, "Buffer", descriptor);
+            }
+          }),
+      );
+
+      assert.deepStrictEqual(
+        body?.attachments?.map((attachment) => attachment.content),
+        ["", "AA==", "AAE=", "AAEC", "AAECAw==", "AAECAwQ=", "AAECAwQF", "//79"],
+      );
+    }),
+  );
+
   it.effect("decodes success and does not retry", () =>
     Effect.gen(function* () {
       const attempts = yield* Ref.make(0);
@@ -1103,6 +1181,47 @@ describe("effect-email Resend adapter", () => {
     }),
   );
 
+  it.effect("forwards an Idempotency Key only through its HTTP header", () =>
+    Effect.gen(function* () {
+      const seen = yield* Ref.make<readonly Request[]>([]);
+      const client = HttpClient.make((request) =>
+        Result.match(HttpClientRequest.toWebResult(request), {
+          onFailure: (cause) =>
+            Effect.fail(
+              new HttpClientError.HttpClientError({
+                reason: new HttpClientError.EncodeError({ request, cause }),
+              }),
+            ),
+          onSuccess: (web) =>
+            Ref.update(seen, (requests) => [...requests, web]).pipe(
+              Effect.as(
+                HttpClientResponse.fromWeb(
+                  request,
+                  new Response('{"id":"resend-id"}', { status: 200 }),
+                ),
+              ),
+            ),
+        }),
+      );
+      const message = yield* makeMessage();
+      const options = yield* SendOptions.make({ idempotencyKey: "attempt-123" });
+
+      yield* Effect.gen(function* () {
+        const email = yield* Email;
+        yield* email.send(message, options);
+        yield* email.send(message);
+      }).pipe(Effect.provide(provideResend(client)));
+
+      const requests = yield* Ref.get(seen);
+      const firstRequest = requests[0];
+      assert.ok(firstRequest);
+      assert.strictEqual(firstRequest.headers.get("Idempotency-Key"), "attempt-123");
+      assert.strictEqual(requests[1]?.headers.has("Idempotency-Key"), false);
+      const body = yield* Effect.promise(() => firstRequest.clone().text());
+      assert.ok(!body.includes("idempotencyKey"));
+    }),
+  );
+
   it.effect("enforces policy before invoking ResendClient", () =>
     Effect.gen(function* () {
       const attempts = yield* Ref.make(0);
@@ -1133,9 +1252,14 @@ describe("effect-email Resend adapter", () => {
       const message = yield* makeMessage();
       const cases: ReadonlyArray<readonly [number, string, "permanent" | "retryable"]> = [
         [401, "AuthenticationFailure", "permanent"],
+        [403, "AuthenticationFailure", "permanent"],
         [429, "RateLimitFailure", "retryable"],
+        [400, "RejectedMessageFailure", "permanent"],
         [422, "RejectedMessageFailure", "permanent"],
+        [499, "RejectedMessageFailure", "permanent"],
+        [500, "TransportUnavailableFailure", "retryable"],
         [503, "TransportUnavailableFailure", "retryable"],
+        [599, "TransportUnavailableFailure", "retryable"],
         [302, "ProviderProtocolFailure", "permanent"],
       ];
       for (const [status, tag, disposition] of cases) {
@@ -1162,19 +1286,119 @@ describe("effect-email Resend adapter", () => {
         assert.ok(!rendered.includes("report.txt"));
       }
 
-      const malformedClient = HttpClient.make((request) =>
-        Effect.succeed(HttpClientResponse.fromWeb(request, new Response("{}", { status: 200 }))),
-      );
-      const malformedFailure = yield* Effect.gen(function* () {
-        const email = yield* Email;
-        return yield* email.send(message);
-      }).pipe(Effect.provide(provideResend(malformedClient)), Effect.flip);
-      assert.ok(Predicate.isTagged(malformedFailure, "ProviderProtocolFailure"));
+      for (const body of ["{}", '{"id":""}', '{"id":" "}', '{"id":123}', "not-json", ""]) {
+        const malformedClient = HttpClient.make((request) =>
+          Effect.succeed(HttpClientResponse.fromWeb(request, new Response(body, { status: 200 }))),
+        );
+        const malformedFailure = yield* Effect.gen(function* () {
+          const email = yield* Email;
+          return yield* email.send(message);
+        }).pipe(Effect.provide(provideResend(malformedClient)), Effect.flip);
+        assert.ok(Predicate.isTagged(malformedFailure, "AmbiguousSendFailure"));
+        assert.strictEqual(malformedFailure.disposition, "ambiguous");
+        assert.deepStrictEqual(malformedFailure.metadata, { status: 200 });
+      }
 
       const config = yield* Effect.gen(function* () {
         return yield* Resend.ResendConfig;
       }).pipe(Effect.provide(Resend.ResendConfig.layer({ apiKey: Redacted.make("secret") })));
       assert.deepStrictEqual(config.apiKey, Redacted.make("secret"));
+    }),
+  );
+
+  it.effect("extracts only approved bounded response metadata", () =>
+    Effect.gen(function* () {
+      const message = yield* makeMessage();
+      const failWithHeaders = (headers: HeadersInit) =>
+        Effect.gen(function* () {
+          const email = yield* Email;
+          return yield* email.send(message);
+        }).pipe(
+          Effect.provide(
+            provideResend(
+              HttpClient.make((request) =>
+                Effect.succeed(
+                  HttpClientResponse.fromWeb(
+                    request,
+                    new Response("private provider body", { status: 429, headers }),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Effect.flip,
+        );
+
+      const delayFailure = yield* failWithHeaders({
+        "Retry-After": "120",
+        "X-Request-ID": "request-123",
+        Authorization: "secret",
+        "X-Private": "sender@example.com",
+      });
+      assert.deepStrictEqual(delayFailure.metadata, {
+        status: 429,
+        retryAfter: RetryAfterVariants.DelaySeconds({ seconds: 120 }),
+        requestId: "request-123",
+      });
+
+      for (const retryAfter of [
+        "Sun, 06 Nov 1994 08:49:37 GMT",
+        "Sunday, 06-Nov-94 08:49:37 GMT",
+        "Sun Nov  6 08:49:37 1994",
+      ]) {
+        const dateFailure = yield* failWithHeaders({ "Retry-After": retryAfter });
+        assert.deepStrictEqual(dateFailure.metadata, {
+          status: 429,
+          retryAfter: RetryAfterVariants.HttpDate({
+            value: "Sun, 06 Nov 1994 08:49:37 GMT",
+          }),
+        });
+      }
+
+      for (const invalidRetryAfter of ["9007199254740992", "2026-08-19", "not-a-date"]) {
+        const invalidFailure = yield* failWithHeaders({
+          "Retry-After": invalidRetryAfter,
+          "X-Request-ID": "é".repeat(256),
+          "Request-ID": "not-approved",
+        });
+        assert.deepStrictEqual(invalidFailure.metadata, { status: 429 });
+      }
+      assert.ok(!String(delayFailure).includes("secret"));
+      assert.ok(!String(delayFailure).includes("sender@example.com"));
+      assert.ok(!String(delayFailure).includes("private provider body"));
+    }),
+  );
+
+  it.effect("keeps transport uncertainty, defects, and interruption distinct", () =>
+    Effect.gen(function* () {
+      const message = yield* makeMessage();
+      const sendWith = (client: HttpClient.HttpClient) =>
+        Effect.gen(function* () {
+          const email = yield* Email;
+          return yield* email.send(message);
+        }).pipe(Effect.provide(provideResend(client)));
+      const transportClient = HttpClient.make((request) =>
+        Effect.fail(
+          new HttpClientError.HttpClientError({
+            reason: new HttpClientError.TransportError({ request }),
+          }),
+        ),
+      );
+      const encodeClient = HttpClient.make((request) =>
+        Effect.fail(
+          new HttpClientError.HttpClientError({
+            reason: new HttpClientError.EncodeError({ request }),
+          }),
+        ),
+      );
+      const interruptedClient = HttpClient.make(() => Effect.interrupt);
+
+      const transportFailure = yield* sendWith(transportClient).pipe(Effect.flip);
+      assert.ok(Predicate.isTagged(transportFailure, "AmbiguousSendFailure"));
+      assert.strictEqual(transportFailure.disposition, "ambiguous");
+      assert.strictEqual(transportFailure.metadata, undefined);
+      assert.ok(Exit.hasDies(yield* sendWith(encodeClient).pipe(Effect.exit)));
+      assert.ok(Exit.hasInterrupts(yield* sendWith(interruptedClient).pipe(Effect.exit)));
     }),
   );
 });

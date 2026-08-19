@@ -1,7 +1,26 @@
 import { Option, Schema, SchemaTransformation } from "effect";
 import { MessageBody, type EmailMessage, type Mailbox } from "../index.js";
 
-const encodeAttachment = (content: Uint8Array): string => Buffer.from(content).toString("base64");
+const base64Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const asciiDecoder = new TextDecoder();
+
+const encodeAttachment = (content: Uint8Array): string => {
+  const encoded = new Uint8Array(Math.ceil(content.byteLength / 3) * 4);
+  for (let inputIndex = 0, outputIndex = 0; inputIndex < content.byteLength; inputIndex += 3) {
+    const first = content[inputIndex] ?? 0;
+    const second = content[inputIndex + 1] ?? 0;
+    const third = content[inputIndex + 2] ?? 0;
+    encoded[outputIndex++] = base64Alphabet.charCodeAt(first >> 2);
+    encoded[outputIndex++] = base64Alphabet.charCodeAt(((first & 0x03) << 4) | (second >> 4));
+    encoded[outputIndex++] =
+      inputIndex + 1 < content.byteLength
+        ? base64Alphabet.charCodeAt(((second & 0x0f) << 2) | (third >> 6))
+        : 61;
+    encoded[outputIndex++] =
+      inputIndex + 2 < content.byteLength ? base64Alphabet.charCodeAt(third & 0x3f) : 61;
+  }
+  return asciiDecoder.decode(encoded);
+};
 
 const ResendAttachment = Schema.Struct({
   filename: Schema.String,
