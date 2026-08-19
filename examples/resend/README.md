@@ -10,4 +10,6 @@ cp .env.example .env
 bun run send
 ```
 
+`src/send.ts` constructs parsed Send Options and passes them as the optional second argument to `Email.send`. Reusing its Idempotency Key for the same logical send is provider-deduplicated only within Resend's currently documented 24-hour window. Change the key when you change the logical email.
+
 Edit `src/send.ts` to change sender, recipient, subject, body, provider-neutral headers, or the inline attachment referenced from HTML with `cid:logo@example.com`.

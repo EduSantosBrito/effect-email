@@ -1,5 +1,5 @@
 import { Config, Effect } from "effect";
-import { Email, EmailMessage } from "effect-email";
+import { Email, EmailMessage, SendOptions } from "effect-email";
 import * as Resend from "effect-email/resend";
 
 const emailDomain = Config.nonEmptyString("EMAIL_DOMAIN");
@@ -26,7 +26,10 @@ const program = Effect.gen(function* () {
     headers: { "X-Campaign-ID": "example" },
   });
 
-  const receipt = yield* email.send(message);
+  const options = yield* SendOptions.make({
+    idempotencyKey: "effect-email-resend-example-v1",
+  });
+  const receipt = yield* email.send(message, options);
 
   yield* Effect.logInfo(`sent ${receipt.provider}:${receipt.messageId}`);
 });

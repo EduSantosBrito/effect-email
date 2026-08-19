@@ -1,6 +1,6 @@
 {
   "name": "effect-email",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Effect-first email SDK with provider-neutral core APIs and Resend/SMTP support.",
   "keywords": [
     "effect",

@@ -110,6 +110,42 @@ await Effect.runPromise(program.pipe(Effect.provide(Smtp.defaultLayer)));
 
 SMTP receipts report provider acceptance only. The SMTP message ID is useful for tracing an accepted send, but it is not proof that a recipient inbox received the email and it is not a duplicate-send prevention key.
 
+## Send Options and Idempotency
+
+Send Options describe one send attempt; they are not part of the provider-neutral Email Message. Construct them through `SendOptions.make` so an invalid Idempotency Key fails before Send Policy validation or Transport Adapter side effects.
+
+```ts
+import { Effect } from "effect";
+import { Email, EmailMessage, SendOptions } from "effect-email";
+
+const program = Effect.gen(function* () {
+  const email = yield* Email;
+  const message = yield* EmailMessage.make({
+    from: "Acme <onboarding@example.com>",
+    to: "user@example.com",
+    subject: "Your receipt",
+    text: "Thanks for your order.",
+  });
+  const options = yield* SendOptions.make({
+    idempotencyKey: "order-123-receipt-v1",
+  });
+
+  return yield* email.send(message, options);
+});
+```
+
+`email.send(message)` remains supported and performs a normal attempt without an Idempotency Key. A key must contain 1–256 visible ASCII characters without spaces. Reuse a key only for the same logical send.
+
+### Idempotency guarantees by adapter
+
+| Transport Adapter | Deduplication   | Guarantee and scope                                                                                                                                                            |
+| ----------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Resend            | Provider-backed | The same valid key and logical send are deduplicated only within Resend's currently documented 24-hour retention window. There is no guarantee after that window.              |
+| Test              | Layer-local     | The same key and structurally equal Email Message replay the original Send Receipt for the lifetime of that Test Layer. Resetting or replacing the Layer clears the guarantee. |
+| SMTP              | None            | SMTP accepts the common Send Options shape but ignores the Idempotency Key. It does not persist the key or turn it into `Message-ID` or an Email Header.                       |
+
+Effect Email does not provide a persistent idempotency coordinator. Supplying an Idempotency Key therefore does not make retry universally safe; use the guarantee of the selected Transport Adapter.
+
 ## Send HTML
 
 Pass `html` for HTML-only email, or pass both `text` and `html` for a multipart body.
@@ -243,6 +279,64 @@ describe("email", () => {
   );
 });
 ```
+
+## Send Failures, Ambiguity, and Retry
+
+Every expected `SendFailure` has a `disposition`:
+
+| Disposition | Meaning for the observed attempt                                                       |
+| ----------- | -------------------------------------------------------------------------------------- |
+| `permanent` | The attempt should not be repeated unchanged.                                          |
+| `retryable` | Non-acceptance is known and the application may choose to try again.                   |
+| `ambiguous` | Provider acceptance may already have happened, but no valid Send Receipt is available. |
+
+`AmbiguousSendFailure` makes Duplicate Send risk explicit. A Duplicate Send is an unintended second transport acceptance of the same Email Message. Retrying an ambiguous attempt can create one unless the selected Transport Adapter can deduplicate the retry with the same Idempotency Key. SMTP provides no such guarantee.
+
+The SDK never retries or applies backoff automatically. Retry timing, backoff, attempt limits, Idempotency Key reuse, and the decision to retry an ambiguous attempt remain explicit application responsibilities.
+
+## Migrating to Send Options and `disposition`
+
+Existing one-argument calls remain source- and behavior-compatible:
+
+```ts
+yield * email.send(message);
+```
+
+To opt into an adapter's idempotency capability, construct parsed Send Options and pass the optional second argument:
+
+```ts
+const options = yield * SendOptions.make({ idempotencyKey: "logical-send-123" });
+yield * email.send(message, options);
+```
+
+The `retryable` field remains for one compatibility release but is deprecated. Migrate recovery decisions to `disposition`; `retryable` is `false` for both `permanent` and `ambiguous` failures. Exhaustive matches over `SendFailure._tag` must add `AmbiguousSendFailure`:
+
+```ts
+import type { SendFailure } from "effect-email";
+
+const assertNever = (value: never): never => {
+  throw new Error(`Unexpected SendFailure: ${String(value)}`);
+};
+
+const recovery = (failure: SendFailure) => {
+  switch (failure._tag) {
+    case "SendPolicyViolation":
+    case "AuthenticationFailure":
+    case "RejectedMessageFailure":
+    case "ProviderProtocolFailure":
+      return "do-not-retry" as const;
+    case "RateLimitFailure":
+    case "TransportUnavailableFailure":
+      return "application-may-retry" as const;
+    case "AmbiguousSendFailure":
+      return "resolve-possible-acceptance" as const;
+    default:
+      return assertNever(failure);
+  }
+};
+```
+
+A `retryable` disposition describes the observed attempt; it does not enable automatic retry. An `ambiguous` disposition requires an application decision based on the adapter guarantee and the consequences of a Duplicate Send.
 
 ## Custom Policy
 
