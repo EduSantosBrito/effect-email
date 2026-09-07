@@ -67,7 +67,7 @@
     "prepare": "bun --bun effect-tsgo patch"
   },
   "dependencies": {
-    "nodemailer": "9.0.5"
+    "nodemailer": "9.0.6"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "catalog:",
